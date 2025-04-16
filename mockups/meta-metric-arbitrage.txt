@@ -1,0 +1,399 @@
+import tensorflow as tf
+import numpy as np
+from dataclasses import dataclass
+from typing import Dict, List, Tuple, Optional
+from collections import deque
+import heapq
+
+@dataclass
+class MetricWeight:
+    coherence_weight: float
+    innovation_weight: float
+    conviction_weight: float
+    stability_weight: float
+    semantic_power: float  # How much this metric influences market behavior
+
+@dataclass
+class SemanticIndex:
+    name: str
+    components: List[str]
+    weights: Dict[str, float]
+    metric_weights: MetricWeight
+    value: float
+    volatility: float
+    momentum: float
+
+class MetaMetricAnalyzer:
+    def __init__(
+        self,
+        market: 'NeuroMarket',
+        window_size: int = 100,
+        learning_rate: float = 0.001
+    ):
+        self.market = market
+        self.window_size = window_size
+        
+        # Track metric importance over time
+        self.metric_weights_history = deque(maxlen=window_size)
+        self.market_impact_history = deque(maxlen=window_size)
+        
+        # Neural components
+        self.weight_predictor = self._build_weight_predictor()
+        self.impact_analyzer = self._build_impact_analyzer()
+        
+        # Semantic indexes
+        self.indexes: Dict[str, SemanticIndex] = {}
+        
+        # Meta-metric state
+        self.current_weights = self._initialize_weights()
+        
+    def _initialize_weights(self) -> MetricWeight:
+        """Initialize metric weights"""
+        return MetricWeight(
+            coherence_weight=0.25,
+            innovation_weight=0.25,
+            conviction_weight=0.25,
+            stability_weight=0.25,
+            semantic_power=1.0
+        )
+    
+    def _build_weight_predictor(self) -> tf.keras.Model:
+        """Build network for predicting metric weight evolution"""
+        model = tf.keras.Sequential([
+            tf.keras.layers.LSTM(64, input_shape=(None, 10)),
+            tf.keras.layers.Dense(32),
+            tf.keras.layers.LeakyReLU(),
+            tf.keras.layers.Dense(5)  # Weights + semantic power
+        ])
+        
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(0.001),
+            loss='mse'
+        )
+        return model
+    
+    def _build_impact_analyzer(self) -> tf.keras.Model:
+        """Build network for analyzing metric market impact"""
+        model = tf.keras.Sequential([
+            tf.keras.layers.Dense(64, input_dim=15),
+            tf.keras.layers.LeakyReLU(),
+            tf.keras.layers.Dense(32),
+            tf.keras.layers.LeakyReLU(),
+            tf.keras.layers.Dense(4)  # Impact scores for each metric
+        ])
+        
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(0.001),
+            loss='mse'
+        )
+        return model
+    
+    def update_metric_weights(self) -> MetricWeight:
+        """Update metric importance weights based on market behavior"""
+        # Prepare historical data
+        market_states = list(self.market.state_history)[-10:]
+        if len(market_states) < 10:
+            return self.current_weights
+            
+        # Create feature sequence
+        features = np.array([[
+            state.health_index,
+            state.systemic_risk,
+            state.collective_conviction,
+            state.prediction_consensus,
+            *state.reflex_state.values()
+        ] for state in market_states])
+        
+        # Predict new weights
+        weights = self.weight_predictor.predict(
+            np.expand_dims(features, 0),
+            verbose=0
+        )[0]
+        
+        # Create new weight state
+        new_weights = MetricWeight(
+            coherence_weight=float(weights[0]),
+            innovation_weight=float(weights[1]),
+            conviction_weight=float(weights[2]),
+            stability_weight=float(weights[3]),
+            semantic_power=float(weights[4])
+        )
+        
+        self.metric_weights_history.append(new_weights)
+        self.current_weights = new_weights
+        
+        return new_weights
+    
+    def analyze_market_impact(self) -> Dict[str, float]:
+        """Analyze how different metrics impact market behavior"""
+        if not self.market.listings:
+            return {}
+            
+        # Prepare features
+        features = [
+            self.current_weights.coherence_weight,
+            self.current_weights.innovation_weight,
+            self.current_weights.conviction_weight,
+            self.current_weights.stability_weight,
+            self.current_weights.semantic_power,
+            self.market.market_state.health_index,
+            self.market.market_state.systemic_risk,
+            self.market.market_state.collective_conviction,
+            # Add more relevant features...
+        ]
+        
+        # Get impact scores
+        impact_scores = self.impact_analyzer.predict(
+            np.expand_dims(features, 0),
+            verbose=0
+        )[0]
+        
+        impact = {
+            'coherence_impact': float(impact_scores[0]),
+            'innovation_impact': float(impact_scores[1]),
+            'conviction_impact': float(impact_scores[2]),
+            'stability_impact': float(impact_scores[3])
+        }
+        
+        self.market_impact_history.append(impact)
+        return impact
+    
+    def create_semantic_index(
+        self,
+        name: str,
+        component_criteria: Dict[str, Dict[str, float]]
+    ) -> Optional[SemanticIndex]:
+        """Create a new semantic index based on criteria"""
+        qualifying_components = []
+        weights = {}
+        
+        for ticker, metrics in self.market.listings.items():
+            score = 0.0
+            meets_criteria = True
+            
+            for metric, bounds in component_criteria.items():
+                value = getattr(metrics, metric)
+                if (value < bounds.get('min', -float('inf')) or
+                    value > bounds.get('max', float('inf'))):
+                    meets_criteria = False
+                    break
+                score += value * self.current_weights.__dict__[f"{metric}_weight"]
+            
+            if meets_criteria:
+                qualifying_components.append(ticker)
+                weights[ticker] = score
+        
+        if not qualifying_components:
+            return None
+            
+        # Normalize weights
+        total_score = sum(weights.values())
+        weights = {k: v/total_score for k, v in weights.items()}
+        
+        # Calculate initial index value and volatility
+        value = sum(
+            weights[c] * self._calculate_component_value(c)
+            for c in qualifying_components
+        )
+        
+        volatility = self._calculate_index_volatility(
+            qualifying_components,
+            weights
+        )
+        
+        momentum = self._calculate_index_momentum(
+            qualifying_components,
+            weights
+        )
+        
+        index = SemanticIndex(
+            name=name,
+            components=qualifying_components,
+            weights=weights,
+            metric_weights=self.current_weights,
+            value=value,
+            volatility=volatility,
+            momentum=momentum
+        )
+        
+        self.indexes[name] = index
+        return index
+    
+    def _calculate_component_value(self, ticker: str) -> float:
+        """Calculate semantic value of a component"""
+        metrics = self.market.listings[ticker]
+        return sum(
+            getattr(metrics, metric) * weight
+            for metric, weight in self.current_weights.__dict__.items()
+            if metric != 'semantic_power'
+        )
+    
+    def _calculate_index_volatility(
+        self,
+        components: List[str],
+        weights: Dict[str, float]
+    ) -> float:
+        """Calculate index volatility"""
+        if len(self.market.state_history) < 2:
+            return 0.0
+            
+        # Calculate value changes
+        values = []
+        for i in range(min(10, len(self.market.state_history) - 1)):
+            value = sum(
+                weights[c] * self._calculate_component_value(c)
+                for c in components
+            )
+            values.append(value)
+            
+        return float(np.std(values)) if values else 0.0
+    
+    def _calculate_index_momentum(
+        self,
+        components: List[str],
+        weights: Dict[str, float]
+    ) -> float:
+        """Calculate index momentum"""
+        if len(self.market.state_history) < 2:
+            return 0.0
+            
+        recent_values = []
+        for i in range(min(5, len(self.market.state_history))):
+            value = sum(
+                weights[c] * self._calculate_component_value(c)
+                for c in components
+            )
+            recent_values.append(value)
+            
+        if len(recent_values) < 2:
+            return 0.0
+            
+        return float(
+            (recent_values[-1] - recent_values[0]) /
+            abs(recent_values[0])
+        )
+    
+    def update_indexes(self):
+        """Update all semantic indexes"""
+        for name, index in self.indexes.items():
+            # Update value
+            new_value = sum(
+                index.weights[c] * self._calculate_component_value(c)
+                for c in index.components
+            )
+            
+            # Update volatility
+            new_volatility = self._calculate_index_volatility(
+                index.components,
+                index.weights
+            )
+            
+            # Update momentum
+            new_momentum = self._calculate_index_momentum(
+                index.components,
+                index.weights
+            )
+            
+            # Create updated index
+            self.indexes[name] = SemanticIndex(
+                name=name,
+                components=index.components,
+                weights=index.weights,
+                metric_weights=self.current_weights,
+                value=new_value,
+                volatility=new_volatility,
+                momentum=new_momentum
+            )
+    
+    def get_misalignment_heatmap(self) -> Dict[str, float]:
+        """Generate semantic misalignment heatmap"""
+        if not self.market.listings:
+            return {}
+            
+        heatmap = {}
+        for ticker, metrics in self.market.listings.items():
+            # Calculate alignment scores across metrics
+            coherence_align = (
+                metrics.coherence_score *
+                self.current_weights.coherence_weight
+            )
+            innovation_align = (
+                metrics.innovation_alignment *
+                self.current_weights.innovation_weight
+            )
+            conviction_align = (
+                metrics.conviction_stability *
+                self.current_weights.conviction_weight
+            )
+            
+            # Calculate misalignment score
+            misalignment = np.std([
+                coherence_align,
+                innovation_align,
+                conviction_align
+            ])
+            
+            heatmap[ticker] = float(misalignment)
+            
+        return heatmap
+    
+    def get_analytics(self) -> Dict:
+        """Get comprehensive analytics"""
+        return {
+            "metric_weights": self.current_weights.__dict__,
+            "market_impact": self.analyze_market_impact(),
+            "indexes": {
+                name: {
+                    "value": index.value,
+                    "volatility": index.volatility,
+                    "momentum": index.momentum,
+                    "components": len(index.components)
+                }
+                for name, index in self.indexes.items()
+            },
+            "misalignment": self.get_misalignment_heatmap()
+        }
+
+def run_meta_metric_test():
+    """Test the meta-metric system"""
+    market = NeuroMarket()
+    analyzer = MetaMetricAnalyzer(market)
+    
+    # Create test indexes
+    analyzer.create_semantic_index(
+        "ConvictionIndex",
+        {
+            "conviction_stability": {"min": 0.7},
+            "coherence_score": {"min": 0.6}
+        }
+    )
+    
+    analyzer.create_semantic_index(
+        "InnovationIndex",
+        {
+            "innovation_alignment": {"min": 0.8},
+            "regulatory_risk": {"max": 0.3}
+        }
+    )
+    
+    # Run simulation
+    for i in range(100):
+        # Update market
+        market.update_market_state()
+        
+        # Update meta-metrics
+        analyzer.update_metric_weights()
+        analyzer.update_indexes()
+        
+        if i % 10 == 0:
+            print(f"\nStep {i}:")
+            analytics = analyzer.get_analytics()
+            print("Metric Weights:", analytics["metric_weights"])
+            print("\nIndex Values:")
+            for name, stats in analytics["indexes"].items():
+                print(f"{name}: {stats['value']:.3f}")
+    
+    return market, analyzer
+
+if __name__ == "__main__":
+    market, analyzer = run_meta_metric_test()
