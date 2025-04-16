@@ -1,0 +1,404 @@
+import tensorflow as tf
+import numpy as np
+from dataclasses import dataclass
+from typing import Dict, List, Tuple, Optional
+from collections import deque
+import heapq
+
+@dataclass
+class TopologySignal:
+    signal_type: str  # e.g., "curvature_spike", "dimension_shift"
+    strength: float
+    direction: str  # "long" or "short"
+    confidence: float
+    time_horizon: int
+
+@dataclass
+class TopologyPosition:
+    position_id: str
+    signal: TopologySignal
+    size: float
+    entry_manifold_dim: int
+    entry_curvature: float
+    stop_loss: float
+    take_profit: float
+    topology_invalidation: Dict[str, float]
+
+class TopologyTrader:
+    def __init__(
+        self,
+        detector: 'PhaseTransitionDetector',
+        initial_capital: float = 1000.0,
+        risk_per_trade: float = 0.02,
+        min_confidence: float = 0.7
+    ):
+        self.detector = detector
+        self.capital = initial_capital
+        self.risk_per_trade = risk_per_trade
+        self.min_confidence = min_confidence
+        
+        # Portfolio tracking
+        self.active_positions: Dict[str, TopologyPosition] = {}
+        self.position_history = deque(maxlen=1000)
+        
+        # Strategy components
+        self.signal_generator = self._build_signal_generator()
+        self.position_sizer = self._build_position_sizer()
+        self.exit_predictor = self._build_exit_predictor()
+        
+        # Performance tracking
+        self.pnl_history = deque(maxlen=1000)
+        self.topology_metrics = {}
+    
+    def _build_signal_generator(self) -> tf.keras.Model:
+        """Build model for generating topology-based signals"""
+        # Input branches
+        topology_input = tf.keras.Input(shape=(10,))  # Topology metrics
+        curvature_input = tf.keras.Input(shape=(8,))  # Curvature components
+        
+        # Process topology features
+        topology_features = tf.keras.layers.Dense(32, activation='relu')(topology_input)
+        topology_features = tf.keras.layers.Dense(16, activation='relu')(topology_features)
+        
+        # Process curvature features
+        curvature_features = tf.keras.layers.Dense(32, activation='relu')(curvature_input)
+        curvature_features = tf.keras.layers.Dense(16, activation='relu')(curvature_features)
+        
+        # Combine features
+        combined = tf.keras.layers.Concatenate()(
+            [topology_features, curvature_features]
+        )
+        
+        # Signal heads
+        signal_type = tf.keras.layers.Dense(
+            4,
+            activation='softmax',
+            name='signal_type'
+        )(combined)
+        
+        strength = tf.keras.layers.Dense(
+            1,
+            activation='sigmoid',
+            name='strength'
+        )(combined)
+        
+        direction = tf.keras.layers.Dense(
+            2,
+            activation='softmax',
+            name='direction'
+        )(combined)
+        
+        confidence = tf.keras.layers.Dense(
+            1,
+            activation='sigmoid',
+            name='confidence'
+        )(combined)
+        
+        horizon = tf.keras.layers.Dense(
+            1,
+            name='horizon'
+        )(combined)
+        
+        model = tf.keras.Model(
+            inputs=[topology_input, curvature_input],
+            outputs=[signal_type, strength, direction, confidence, horizon]
+        )
+        
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(0.001),
+            loss={
+                'signal_type': 'categorical_crossentropy',
+                'strength': 'mse',
+                'direction': 'categorical_crossentropy',
+                'confidence': 'mse',
+                'horizon': 'mse'
+            }
+        )
+        return model
+    
+    def _build_position_sizer(self) -> tf.keras.Model:
+        """Build model for position sizing based on topology"""
+        model = tf.keras.Sequential([
+            tf.keras.layers.Dense(32, input_dim=15),
+            tf.keras.layers.LeakyReLU(),
+            tf.keras.layers.Dense(16),
+            tf.keras.layers.LeakyReLU(),
+            tf.keras.layers.Dense(3)  # [size, stop_loss, take_profit]
+        ])
+        
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(0.001),
+            loss='mse'
+        )
+        return model
+    
+    def _build_exit_predictor(self) -> tf.keras.Model:
+        """Build model for predicting optimal exit points"""
+        model = tf.keras.Sequential([
+            tf.keras.layers.Dense(32, input_dim=20),
+            tf.keras.layers.LeakyReLU(),
+            tf.keras.layers.Dense(16),
+            tf.keras.layers.LeakyReLU(),
+            tf.keras.layers.Dense(4)  # Exit probabilities and timing
+        ])
+        
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(0.001),
+            loss='mse'
+        )
+        return model
+    
+    def generate_signals(
+        self,
+        topology_state: TopologicalState,
+        phase_transition: PhaseTransition
+    ) -> List[TopologySignal]:
+        """Generate trading signals based on topology"""
+        # Prepare input features
+        topology_features = [
+            topology_state.manifold_dimension,
+            topology_state.stability_index,
+            np.mean(topology_state.local_curvature),
+            np.std(topology_state.local_curvature),
+            len(topology_state.critical_points),
+            phase_transition.energy_barrier,
+            np.mean(phase_transition.instability_modes),
+            np.std(phase_transition.instability_modes),
+            float(phase_transition.bifurcation_type == "pitchfork"),
+            float(phase_transition.bifurcation_type == "saddle-node")
+        ]
+        
+        curvature_features = list(topology_state.local_curvature[:8])
+        
+        # Get model predictions
+        signal_type, strength, direction, confidence, horizon = self.signal_generator.predict(
+            [
+                np.expand_dims(topology_features, 0),
+                np.expand_dims(curvature_features, 0)
+            ],
+            verbose=0
+        )
+        
+        # Decode signals
+        signals = []
+        signal_types = [
+            "curvature_spike",
+            "dimension_shift",
+            "critical_point",
+            "bifurcation"
+        ]
+        
+        for i, prob in enumerate(signal_type[0]):
+            if prob > 0.3:  # Signal threshold
+                signal = TopologySignal(
+                    signal_type=signal_types[i],
+                    strength=float(strength[0][0]),
+                    direction="long" if direction[0][0] > 0.5 else "short",
+                    confidence=float(confidence[0][0]),
+                    time_horizon=int(max(1, horizon[0][0]))
+                )
+                signals.append(signal)
+        
+        return signals
+    
+    def size_position(
+        self,
+        signal: TopologySignal,
+        topology_state: TopologicalState
+    ) -> Tuple[float, float, float]:
+        """Calculate position size and risk parameters"""
+        # Prepare features
+        features = [
+            signal.strength,
+            signal.confidence,
+            signal.time_horizon,
+            topology_state.stability_index,
+            np.mean(topology_state.local_curvature),
+            topology_state.manifold_dimension,
+            float(signal.signal_type == "curvature_spike"),
+            float(signal.signal_type == "dimension_shift"),
+            float(signal.signal_type == "critical_point"),
+            float(signal.signal_type == "bifurcation"),
+            float(signal.direction == "long"),
+            len(self.active_positions),
+            self.capital,
+            self.risk_per_trade,
+            np.mean([p.size for p in self.active_positions.values()]) if self.active_positions else 0
+        ]
+        
+        # Get model predictions
+        size, stop, take = self.position_sizer.predict(
+            np.expand_dims(features, 0),
+            verbose=0
+        )[0]
+        
+        # Adjust for risk and capital
+        max_size = self.capital * self.risk_per_trade / abs(stop)
+        position_size = float(min(max_size, size))
+        stop_loss = float(stop)
+        take_profit = float(take)
+        
+        return position_size, stop_loss, take_profit
+    
+    def should_exit(
+        self,
+        position: TopologyPosition,
+        current_topology: TopologicalState
+    ) -> Tuple[bool, str]:
+        """Determine if position should be exited"""
+        # Prepare features
+        features = [
+            position.signal.strength,
+            position.signal.confidence,
+            position.size,
+            position.entry_manifold_dim,
+            position.entry_curvature,
+            current_topology.manifold_dimension,
+            np.mean(current_topology.local_curvature),
+            current_topology.stability_index,
+            *list(position.topology_invalidation.values()),
+            float(position.signal.direction == "long"),
+            position.stop_loss,
+            position.take_profit,
+            # Add more features...
+        ]
+        
+        # Get exit predictions
+        predictions = self.exit_predictor.predict(
+            np.expand_dims(features, 0),
+            verbose=0
+        )[0]
+        
+        # Decode exit signals
+        stop_prob, target_prob, topology_prob, time_decay = predictions
+        
+        # Check exit conditions
+        if stop_prob > 0.7:
+            return True, "stop_loss"
+        elif target_prob > 0.7:
+            return True, "take_profit"
+        elif topology_prob > 0.7:
+            return True, "topology_invalidation"
+        elif time_decay > 0.9:
+            return True, "time_decay"
+            
+        return False, ""
+    
+    def execute_signals(
+        self,
+        signals: List[TopologySignal],
+        topology_state: TopologicalState
+    ):
+        """Execute trading signals"""
+        for signal in signals:
+            if signal.confidence < self.min_confidence:
+                continue
+                
+            # Calculate position parameters
+            size, stop, take = self.size_position(signal, topology_state)
+            
+            if size <= 0:
+                continue
+                
+            # Create position
+            position_id = f"pos_{len(self.active_positions)}"
+            position = TopologyPosition(
+                position_id=position_id,
+                signal=signal,
+                size=size,
+                entry_manifold_dim=topology_state.manifold_dimension,
+                entry_curvature=float(np.mean(topology_state.local_curvature)),
+                stop_loss=stop,
+                take_profit=take,
+                topology_invalidation={
+                    "manifold_change": 0.5,
+                    "curvature_threshold": 2.0,
+                    "stability_minimum": 0.3
+                }
+            )
+            
+            self.active_positions[position_id] = position
+    
+    def update_positions(
+        self,
+        topology_state: TopologicalState,
+        pnl_calculator: callable
+    ):
+        """Update and manage active positions"""
+        for pos_id, position in list(self.active_positions.items()):
+            # Check exit conditions
+            should_exit, reason = self.should_exit(position, topology_state)
+            
+            if should_exit:
+                # Calculate PnL
+                pnl = pnl_calculator(position)
+                self.capital += pnl
+                self.pnl_history.append((pos_id, pnl, reason))
+                
+                # Store position history
+                self.position_history.append((position, pnl, reason))
+                
+                # Close position
+                del self.active_positions[pos_id]
+    
+    def get_portfolio_state(self) -> Dict:
+        """Get current portfolio state"""
+        return {
+            "capital": self.capital,
+            "active_positions": len(self.active_positions),
+            "total_pnl": sum(pnl for _, pnl, _ in self.pnl_history),
+            "win_rate": self._calculate_win_rate(),
+            "position_metrics": {
+                pos_id: {
+                    "signal_type": pos.signal.signal_type,
+                    "direction": pos.signal.direction,
+                    "size": pos.size,
+                    "confidence": pos.signal.confidence
+                }
+                for pos_id, pos in self.active_positions.items()
+            }
+        }
+    
+    def _calculate_win_rate(self) -> float:
+        """Calculate strategy win rate"""
+        if not self.pnl_history:
+            return 0.0
+            
+        wins = sum(1 for _, pnl, _ in self.pnl_history if pnl > 0)
+        return float(wins / len(self.pnl_history))
+
+def run_topology_trading_test():
+    """Test the topology-aware trading system"""
+    detector = PhaseTransitionDetector()
+    trader = TopologyTrader(detector)
+    
+    # Simulate trading
+    for i in range(100):
+        # Generate test data
+        sequence = np.random.randn(100, 8)
+        
+        # Get topology analysis
+        topology = detector.analyze_topology(sequence)
+        transition, phase = detector.detect_phase_transition(sequence)
+        
+        # Generate and execute signals
+        signals = trader.generate_signals(topology, transition)
+        trader.execute_signals(signals, topology)
+        
+        # Update positions with mock PnL calculator
+        def mock_pnl(position):
+            return position.size * (0.1 if position.signal.direction == "long" else -0.1)
+            
+        trader.update_positions(topology, mock_pnl)
+        
+        if i % 10 == 0:
+            print(f"\nStep {i}:")
+            state = trader.get_portfolio_state()
+            print(f"Capital: {state['capital']:.2f}")
+            print(f"Active Positions: {state['active_positions']}")
+            print(f"Win Rate: {state['win_rate']:.2f}")
+    
+    return detector, trader
+
+if __name__ == "__main__":
+    detector, trader = run_topology_trading_test()
