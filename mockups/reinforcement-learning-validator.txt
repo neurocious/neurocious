@@ -1,0 +1,311 @@
+import tensorflow as tf
+import numpy as np
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
+from collections import deque
+import random
+
+@dataclass
+class Experience:
+    """Represents a single learning experience for the validator"""
+    state_field: tf.Tensor
+    action_projection: tf.Tensor
+    reward: float
+    next_state_field: tf.Tensor
+    entropy: float
+
+class RLValidator:
+    def __init__(
+        self,
+        field_shape: Tuple[int, ...],
+        vector_dims: int,
+        learning_rate: float = 0.001,
+        entropy_weight: float = 0.1,
+        memory_size: int = 10000,
+        batch_size: int = 32
+    ):
+        self.field_shape = field_shape
+        self.vector_dims = vector_dims
+        self.learning_rate = learning_rate
+        self.entropy_weight = entropy_weight
+        self.batch_size = batch_size
+        
+        # Initialize fields
+        self.vector_field = tf.Variable(
+            tf.nn.l2_normalize(
+                tf.random.normal(field_shape + (vector_dims,)),
+                axis=-1
+            )
+        )
+        self.probability_field = tf.Variable(
+            tf.nn.softmax(tf.random.uniform(field_shape))
+        )
+        
+        # Experience replay buffer
+        self.memory = deque(maxlen=memory_size)
+        
+        # Field optimization
+        self.optimizer = tf.keras.optimizers.Adam(learning_rate)
+        
+        # Predictive model for value estimation
+        self.value_network = self._build_value_network()
+        
+    def _build_value_network(self) -> tf.keras.Model:
+        """Build a neural network for value prediction"""
+        input_shape = self.field_shape + (self.vector_dims,)
+        
+        model = tf.keras.Sequential([
+            tf.keras.layers.Conv2D(
+                32, (3, 3), padding='same',
+                input_shape=input_shape[:-1] + (self.vector_dims,)
+            ),
+            tf.keras.layers.LeakyReLU(),
+            tf.keras.layers.Conv2D(32, (3, 3), padding='same'),
+            tf.keras.layers.LeakyReLU(),
+            tf.keras.layers.Flatten(),
+            tf.keras.layers.Dense(128, activation='relu'),
+            tf.keras.layers.Dense(1)  # Value prediction
+        ])
+        
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(self.learning_rate),
+            loss='mse'
+        )
+        return model
+        
+    def project_intent(
+        self,
+        intent_vector: tf.Tensor,
+        explore: bool = True
+    ) -> Tuple[tf.Tensor, float]:
+        """Project intent vector onto field space with exploration"""
+        # Base projection
+        similarity = tf.reduce_sum(
+            tf.multiply(
+                tf.broadcast_to(intent_vector, self.vector_field.shape),
+                self.vector_field
+            ),
+            axis=-1
+        )
+        
+        if explore:
+            # Add exploration noise
+            noise = tf.random.normal(
+                similarity.shape,
+                mean=0.0,
+                stddev=self.entropy_weight
+            )
+            similarity += noise
+            
+        projection = tf.nn.softmax(similarity)
+        
+        # Calculate entropy of projection
+        entropy = tf.reduce_mean(
+            -projection * tf.math.log(projection + 1e-10)
+        )
+        
+        return projection, float(entropy)
+    
+    def store_experience(
+        self,
+        state_field: tf.Tensor,
+        action_projection: tf.Tensor,
+        reward: float,
+        next_state_field: tf.Tensor,
+        entropy: float
+    ):
+        """Store experience in replay buffer"""
+        experience = Experience(
+            state_field=state_field.numpy(),
+            action_projection=action_projection.numpy(),
+            reward=reward,
+            next_state_field=next_state_field.numpy(),
+            entropy=entropy
+        )
+        self.memory.append(experience)
+    
+    def optimize_field(self):
+        """Update vector field based on stored experiences"""
+        if len(self.memory) < self.batch_size:
+            return
+            
+        # Sample batch
+        batch = random.sample(self.memory, self.batch_size)
+        
+        # Prepare training data
+        state_fields = tf.stack([exp.state_field for exp in batch])
+        action_projs = tf.stack([exp.action_projection for exp in batch])
+        rewards = tf.constant([exp.reward for exp in batch])
+        next_fields = tf.stack([exp.next_state_field for exp in batch])
+        entropies = tf.constant([exp.entropy for exp in batch])
+        
+        # Compute value estimates
+        current_values = self.value_network(state_fields)
+        next_values = self.value_network(next_fields)
+        
+        # Compute advantages
+        advantages = rewards + 0.99 * tf.squeeze(next_values) - tf.squeeze(current_values)
+        
+        # Update vector field
+        with tf.GradientTape() as tape:
+            # Policy loss
+            log_probs = tf.math.log(
+                tf.reduce_sum(action_projs * self.vector_field, axis=-1)
+            )
+            policy_loss = -tf.reduce_mean(advantages * log_probs)
+            
+            # Entropy regularization
+            entropy_loss = -self.entropy_weight * tf.reduce_mean(entropies)
+            
+            total_loss = policy_loss + entropy_loss
+            
+        # Apply gradients
+        grads = tape.gradient(total_loss, [self.vector_field])
+        self.optimizer.apply_gradients(zip(grads, [self.vector_field]))
+        
+        # Normalize field
+        self.vector_field.assign(
+            tf.nn.l2_normalize(self.vector_field, axis=-1)
+        )
+        
+        # Update value network
+        self.value_network.train_on_batch(
+            state_fields,
+            rewards + 0.99 * tf.squeeze(next_values)
+        )
+    
+    def update_probability_field(self, reward: float, projection: tf.Tensor):
+        """Update probability field based on action outcome"""
+        learning_rate = 0.01 * reward
+        update = learning_rate * projection
+        
+        new_field = self.probability_field + update
+        self.probability_field.assign(
+            tf.nn.softmax(new_field)
+        )
+    
+    def get_field_stats(self) -> Dict:
+        """Get current statistics about the validator's fields"""
+        return {
+            "vector_field_norm": float(tf.norm(self.vector_field)),
+            "prob_field_entropy": float(tf.reduce_mean(
+                -self.probability_field *
+                tf.math.log(self.probability_field + 1e-10)
+            )),
+            "memory_size": len(self.memory),
+            "field_gradient_magnitude": float(tf.reduce_mean(
+                tf.abs(tf.gradients(
+                    self.vector_field,
+                    self.vector_field
+                )[0])
+            ))
+        }
+
+class AdaptiveConsensusNetwork:
+    def __init__(
+        self,
+        num_validators: int,
+        field_shape: Tuple[int, ...],
+        vector_dims: int
+    ):
+        self.validators = [
+            RLValidator(field_shape, vector_dims)
+            for _ in range(num_validators)
+        ]
+        
+        self.global_field = tf.Variable(
+            tf.nn.l2_normalize(
+                tf.random.normal(field_shape + (vector_dims,)),
+                axis=-1
+            )
+        )
+        
+    def process_intent(
+        self,
+        intent_vector: tf.Tensor
+    ) -> Tuple[List[tf.Tensor], float]:
+        """Process intent through all validators"""
+        projections = []
+        total_entropy = 0.0
+        
+        for validator in self.validators:
+            proj, entropy = validator.project_intent(intent_vector)
+            projections.append(proj)
+            total_entropy += entropy
+            
+        return projections, total_entropy / len(self.validators)
+    
+    def compute_consensus_reward(
+        self,
+        projections: List[tf.Tensor]
+    ) -> float:
+        """Compute reward based on validator alignment"""
+        mean_proj = tf.reduce_mean(tf.stack(projections), axis=0)
+        
+        alignment_scores = [
+            float(tf.reduce_mean(tf.abs(p - mean_proj)))
+            for p in projections
+        ]
+        
+        return np.mean(alignment_scores)
+    
+    def update_network(self, intent_vector: tf.Tensor):
+        """Process intent and update validator fields"""
+        # Get validator projections
+        projections, entropy = self.process_intent(intent_vector)
+        
+        # Compute rewards
+        consensus_reward = self.compute_consensus_reward(projections)
+        
+        # Update validators
+        for i, validator in enumerate(self.validators):
+            # Store experience
+            validator.store_experience(
+                self.global_field,
+                projections[i],
+                consensus_reward,
+                self.global_field,  # Currently using same field as next state
+                entropy
+            )
+            
+            # Update fields
+            validator.optimize_field()
+            validator.update_probability_field(
+                consensus_reward,
+                projections[i]
+            )
+        
+        # Update global field
+        self._update_global_field()
+    
+    def _update_global_field(self):
+        """Update global field based on validator fields"""
+        mean_field = tf.reduce_mean(
+            tf.stack([v.vector_field for v in self.validators]),
+            axis=0
+        )
+        self.global_field.assign(
+            tf.nn.l2_normalize(mean_field, axis=-1)
+        )
+
+def run_test_network():
+    """Test the adaptive consensus network"""
+    network = AdaptiveConsensusNetwork(
+        num_validators=3,
+        field_shape=(4, 4),
+        vector_dims=3
+    )
+    
+    # Run some test iterations
+    for _ in range(100):
+        test_intent = tf.random.normal([3])
+        network.update_network(test_intent)
+        
+    # Print validator stats
+    for i, validator in enumerate(network.validators):
+        print(f"Validator {i} stats:", validator.get_field_stats())
+    
+    return network
+
+if __name__ == "__main__":
+    network = run_test_network()
