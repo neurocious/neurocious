@@ -1,0 +1,345 @@
+import tensorflow as tf
+import numpy as np
+from dataclasses import dataclass
+from typing import Dict, List, Tuple, Optional
+from collections import deque
+import random
+
+@dataclass
+class PredictionOutcome:
+    predicted_field: tf.Tensor
+    actual_field: tf.Tensor
+    prediction_horizon: int
+    confidence: float
+    reward: float
+    accuracy: float
+
+class PredictiveValidator:
+    def __init__(
+        self,
+        field_shape: Tuple[int, ...],
+        vector_dims: int,
+        prediction_horizons: List[int] = [1, 5, 10],
+        initial_stake: float = 1000.0,
+        min_confidence: float = 0.2
+    ):
+        self.field_shape = field_shape
+        self.vector_dims = vector_dims
+        self.prediction_horizons = prediction_horizons
+        self.stake = initial_stake
+        self.min_confidence = min_confidence
+        
+        # Field state
+        self.current_field = tf.Variable(
+            tf.nn.l2_normalize(
+                tf.random.normal(field_shape + (vector_dims,)),
+                axis=-1
+            )
+        )
+        
+        # Prediction models for different time horizons
+        self.predictors = {
+            horizon: self._build_predictor()
+            for horizon in prediction_horizons
+        }
+        
+        # Prediction history for performance tracking
+        self.prediction_history = deque(maxlen=1000)
+        
+        # Active predictions waiting for verification
+        self.active_predictions: Dict[int, List[Tuple[tf.Tensor, float]]] = {}
+        
+        # Performance metrics
+        self.accuracy_scores = {horizon: 0.0 for horizon in prediction_horizons}
+        self.cumulative_rewards = 0.0
+        
+    def _build_predictor(self) -> tf.keras.Model:
+        """Build a neural network for field state prediction"""
+        input_shape = self.field_shape + (self.vector_dims,)
+        
+        model = tf.keras.Sequential([
+            # Convolutional layers to process field structure
+            tf.keras.layers.Conv2D(
+                64, (3, 3), padding='same',
+                input_shape=input_shape[:-1] + (self.vector_dims,)
+            ),
+            tf.keras.layers.LeakyReLU(),
+            tf.keras.layers.Conv2D(64, (3, 3), padding='same'),
+            tf.keras.layers.LeakyReLU(),
+            
+            # LSTM layer for temporal dynamics
+            tf.keras.layers.Reshape((-1, 64)),
+            tf.keras.layers.LSTM(128, return_sequences=True),
+            tf.keras.layers.LSTM(128),
+            
+            # Dense layers for field prediction
+            tf.keras.layers.Dense(256, activation='relu'),
+            tf.keras.layers.Dense(np.prod(input_shape)),
+            tf.keras.layers.Reshape(input_shape)
+        ])
+        
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(0.001),
+            loss='mse',
+            metrics=['mae']
+        )
+        return model
+    
+    def predict_future_field(
+        self,
+        current_intent: tf.Tensor,
+        horizon: int,
+        stake_fraction: float = 0.1
+    ) -> Tuple[tf.Tensor, float]:
+        """Make a prediction about future field state"""
+        if horizon not in self.prediction_horizons:
+            raise ValueError(f"Invalid prediction horizon: {horizon}")
+            
+        # Generate prediction
+        predictor = self.predictors[horizon]
+        predicted_field = predictor(
+            tf.expand_dims(self.current_field, 0)
+        )[0]
+        
+        # Calculate prediction confidence
+        field_uncertainty = tf.math.reduce_std(predicted_field)
+        confidence = float(1.0 / (1.0 + field_uncertainty))
+        
+        # Stake amount based on confidence
+        stake_amount = self.stake * stake_fraction * confidence
+        
+        # Store prediction for later verification
+        if horizon not in self.active_predictions:
+            self.active_predictions[horizon] = []
+        
+        self.active_predictions[horizon].append((
+            predicted_field,
+            stake_amount
+        ))
+        
+        return predicted_field, confidence
+    
+    def verify_predictions(
+        self,
+        actual_field: tf.Tensor,
+        current_step: int
+    ) -> List[PredictionOutcome]:
+        """Verify predictions and calculate rewards"""
+        outcomes = []
+        
+        for horizon, predictions in self.active_predictions.items():
+            if current_step % horizon == 0 and predictions:
+                for pred_field, staked_amount in predictions:
+                    # Calculate prediction accuracy
+                    accuracy = float(tf.reduce_mean(
+                        tf.keras.losses.cosine_similarity(
+                            pred_field,
+                            actual_field
+                        )
+                    ))
+                    
+                    # Calculate reward based on accuracy and stake
+                    reward = self._calculate_reward(
+                        accuracy,
+                        staked_amount
+                    )
+                    
+                    # Update validator's stake
+                    self.stake += reward
+                    self.cumulative_rewards += reward
+                    
+                    # Record outcome
+                    outcome = PredictionOutcome(
+                        predicted_field=pred_field,
+                        actual_field=actual_field,
+                        prediction_horizon=horizon,
+                        confidence=staked_amount / self.stake,
+                        reward=reward,
+                        accuracy=accuracy
+                    )
+                    outcomes.append(outcome)
+                    self.prediction_history.append(outcome)
+                
+                # Clear verified predictions
+                self.active_predictions[horizon] = []
+                
+                # Update accuracy scores
+                self.accuracy_scores[horizon] = np.mean([
+                    o.accuracy
+                    for o in self.prediction_history
+                    if o.prediction_horizon == horizon
+                ])
+                
+                # Update predictor model
+                self._update_predictor(horizon, actual_field)
+        
+        return outcomes
+    
+    def _calculate_reward(
+        self,
+        accuracy: float,
+        staked_amount: float
+    ) -> float:
+        """Calculate reward based on prediction accuracy and stake"""
+        # Base reward multiplier
+        base_multiplier = 2.0
+        
+        # Accuracy bonus (exponential scaling)
+        accuracy_bonus = np.exp(accuracy) - 1
+        
+        # Confidence penalty (risk-adjusted return)
+        confidence = staked_amount / self.stake
+        confidence_penalty = 1.0 - (confidence - self.min_confidence)
+        
+        # Final reward calculation
+        reward = staked_amount * (
+            base_multiplier +
+            accuracy_bonus * confidence_penalty
+        )
+        
+        # Cap maximum reward to prevent exploitation
+        max_reward = staked_amount * 5.0
+        return float(min(reward, max_reward))
+    
+    def _update_predictor(self, horizon: int, actual_field: tf.Tensor):
+        """Update prediction model based on actual outcomes"""
+        predictor = self.predictors[horizon]
+        
+        # Get relevant historical data
+        history = [
+            (o.predicted_field, o.actual_field)
+            for o in self.prediction_history
+            if o.prediction_horizon == horizon
+        ]
+        
+        if len(history) >= 32:  # Minimum batch size
+            # Prepare training data
+            pred_fields, actual_fields = zip(*history[-32:])
+            X = tf.stack([self.current_field] * 32)
+            y = tf.stack(actual_fields)
+            
+            # Update model
+            predictor.train_on_batch(X, y)
+    
+    def get_performance_metrics(self) -> Dict:
+        """Get validator's prediction performance metrics"""
+        return {
+            "stake": float(self.stake),
+            "cumulative_rewards": float(self.cumulative_rewards),
+            "accuracy_scores": {
+                h: float(score)
+                for h, score in self.accuracy_scores.items()
+            },
+            "active_predictions": {
+                h: len(preds)
+                for h, preds in self.active_predictions.items()
+            }
+        }
+
+class PredictiveConsensusNetwork:
+    def __init__(
+        self,
+        num_validators: int,
+        field_shape: Tuple[int, ...],
+        vector_dims: int,
+        prediction_horizons: List[int] = [1, 5, 10]
+    ):
+        self.validators = [
+            PredictiveValidator(
+                field_shape,
+                vector_dims,
+                prediction_horizons
+            )
+            for _ in range(num_validators)
+        ]
+        
+        self.global_field = tf.Variable(
+            tf.nn.l2_normalize(
+                tf.random.normal(field_shape + (vector_dims,)),
+                axis=-1
+            )
+        )
+        
+        self.current_step = 0
+    
+    def update(self, intent_vector: tf.Tensor):
+        """Process network update and verify predictions"""
+        self.current_step += 1
+        
+        # Get predictions from validators
+        all_predictions = []
+        for validator in self.validators:
+            for horizon in validator.prediction_horizons:
+                pred_field, confidence = validator.predict_future_field(
+                    intent_vector,
+                    horizon
+                )
+                all_predictions.append((pred_field, confidence))
+        
+        # Update global field
+        self._update_global_field(intent_vector)
+        
+        # Verify predictions
+        all_outcomes = []
+        for validator in self.validators:
+            outcomes = validator.verify_predictions(
+                self.global_field,
+                self.current_step
+            )
+            all_outcomes.extend(outcomes)
+        
+        return all_outcomes
+    
+    def _update_global_field(self, intent_vector: tf.Tensor):
+        """Update global field based on intent and validator predictions"""
+        # Weight validator fields by their prediction accuracy
+        weighted_fields = []
+        total_weight = 0.0
+        
+        for validator in self.validators:
+            # Use average accuracy across horizons as weight
+            weight = np.mean(list(validator.accuracy_scores.values()))
+            weighted_fields.append(
+                validator.current_field * weight
+            )
+            total_weight += weight
+        
+        if total_weight > 0:
+            mean_field = tf.add_n(weighted_fields) / total_weight
+            self.global_field.assign(
+                tf.nn.l2_normalize(mean_field, axis=-1)
+            )
+
+def run_prediction_test():
+    """Test the predictive consensus network"""
+    network = PredictiveConsensusNetwork(
+        num_validators=3,
+        field_shape=(4, 4),
+        vector_dims=3
+    )
+    
+    # Run test iterations
+    for _ in range(100):
+        test_intent = tf.random.normal([3])
+        outcomes = network.update(test_intent)
+        
+        if outcomes:
+            print("\nPrediction Outcomes:")
+            for outcome in outcomes[:3]:  # Show first 3
+                print(f"Horizon: {outcome.prediction_horizon}")
+                print(f"Accuracy: {outcome.accuracy:.3f}")
+                print(f"Reward: {outcome.reward:.3f}")
+    
+    # Print validator performance
+    print("\nValidator Performance:")
+    for i, validator in enumerate(network.validators):
+        print(f"\nValidator {i}:")
+        metrics = validator.get_performance_metrics()
+        print(f"Stake: {metrics['stake']:.2f}")
+        print(f"Rewards: {metrics['cumulative_rewards']:.2f}")
+        print("Accuracy Scores:", metrics['accuracy_scores'])
+    
+    return network
+
+if __name__ == "__main__":
+    network = run_prediction_test()
