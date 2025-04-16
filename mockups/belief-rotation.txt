@@ -1,0 +1,378 @@
+import tensorflow as tf
+import numpy as np
+from dataclasses import dataclass
+from typing import Dict, List, Tuple, Optional
+from collections import deque
+import heapq
+
+@dataclass
+class BeliefRegime:
+    dominant_metric: str
+    secondary_metric: str
+    regime_strength: float
+    stability: float
+    momentum: float
+
+@dataclass
+class RotationSignal:
+    from_regime: BeliefRegime
+    to_regime: BeliefRegime
+    confidence: float
+    expected_duration: int
+    market_impact: float
+
+@dataclass
+class MetaIndexSpread:
+    long_index: str
+    short_index: str
+    spread: float
+    volatility: float
+    regime_alignment: float
+
+class BeliefRotationTrader:
+    def __init__(
+        self,
+        analyzer: 'MetaMetricAnalyzer',
+        window_size: int = 100,
+        min_regime_strength: float = 0.6
+    ):
+        self.analyzer = analyzer
+        self.window_size = window_size
+        self.min_regime_strength = min_regime_strength
+        
+        # Regime tracking
+        self.current_regime: Optional[BeliefRegime] = None
+        self.regime_history = deque(maxlen=window_size)
+        
+        # Rotation prediction
+        self.rotation_predictor = self._build_rotation_predictor()
+        self.regime_classifier = self._build_regime_classifier()
+        
+        # Trade tracking
+        self.active_positions: Dict[str, float] = {}
+        self.position_history = deque(maxlen=1000)
+        
+        # Meta-index spreads
+        self.spread_history: Dict[str, deque] = {}
+        
+    def _build_rotation_predictor(self) -> tf.keras.Model:
+        """Build network for predicting belief rotations"""
+        model = tf.keras.Sequential([
+            tf.keras.layers.LSTM(64, input_shape=(None, 15)),
+            tf.keras.layers.Dense(32),
+            tf.keras.layers.LeakyReLU(),
+            tf.keras.layers.Dense(16),
+            tf.keras.layers.LeakyReLU(),
+            tf.keras.layers.Dense(5)  # Rotation parameters
+        ])
+        
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(0.001),
+            loss='mse'
+        )
+        return model
+    
+    def _build_regime_classifier(self) -> tf.keras.Model:
+        """Build network for classifying market regimes"""
+        model = tf.keras.Sequential([
+            tf.keras.layers.Dense(32, input_dim=10),
+            tf.keras.layers.LeakyReLU(),
+            tf.keras.layers.Dropout(0.2),
+            tf.keras.layers.Dense(16),
+            tf.keras.layers.LeakyReLU(),
+            tf.keras.layers.Dense(4)  # Regime probabilities
+        ])
+        
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(0.001),
+            loss='categorical_crossentropy'
+        )
+        return model
+    
+    def identify_current_regime(self) -> BeliefRegime:
+        """Identify current market belief regime"""
+        # Get current metric weights
+        weights = self.analyzer.current_weights
+        metric_weights = {
+            'coherence': weights.coherence_weight,
+            'innovation': weights.innovation_weight,
+            'conviction': weights.conviction_weight,
+            'stability': weights.stability_weight
+        }
+        
+        # Find dominant metrics
+        sorted_metrics = sorted(
+            metric_weights.items(),
+            key=lambda x: x[1],
+            reverse=True
+        )
+        
+        # Calculate regime strength
+        top_weight = sorted_metrics[0][1]
+        second_weight = sorted_metrics[1][1]
+        strength = top_weight / (top_weight + second_weight)
+        
+        # Calculate stability
+        if self.regime_history:
+            last_regime = self.regime_history[-1]
+            stability = float(
+                last_regime.dominant_metric == sorted_metrics[0][0]
+            )
+        else:
+            stability = 1.0
+            
+        # Calculate momentum
+        momentum = self._calculate_regime_momentum(sorted_metrics[0][0])
+        
+        regime = BeliefRegime(
+            dominant_metric=sorted_metrics[0][0],
+            secondary_metric=sorted_metrics[1][0],
+            regime_strength=strength,
+            stability=stability,
+            momentum=momentum
+        )
+        
+        self.current_regime = regime
+        self.regime_history.append(regime)
+        
+        return regime
+    
+    def _calculate_regime_momentum(self, metric: str) -> float:
+        """Calculate momentum for a belief metric"""
+        if len(self.regime_history) < 2:
+            return 0.0
+            
+        # Get recent weights for this metric
+        recent_weights = [
+            getattr(r, f"{metric}_weight")
+            for r in self.analyzer.metric_weights_history
+        ]
+        
+        if len(recent_weights) < 2:
+            return 0.0
+            
+        return float(
+            (recent_weights[-1] - recent_weights[0]) /
+            abs(recent_weights[0])
+        )
+    
+    def predict_rotation(self) -> Optional[RotationSignal]:
+        """Predict upcoming belief rotation"""
+        if len(self.regime_history) < 10:
+            return None
+            
+        # Prepare features
+        features = np.array([[
+            r.regime_strength,
+            r.stability,
+            r.momentum,
+            float(r.dominant_metric == 'coherence'),
+            float(r.dominant_metric == 'innovation'),
+            float(r.dominant_metric == 'conviction'),
+            float(r.dominant_metric == 'stability')
+        ] for r in list(self.regime_history)[-10:]])
+        
+        # Get prediction
+        prediction = self.rotation_predictor.predict(
+            np.expand_dims(features, 0),
+            verbose=0
+        )[0]
+        
+        # Decode prediction
+        confidence = float(prediction[0])
+        if confidence < 0.6:  # Threshold for signal
+            return None
+            
+        # Predict next dominant metric
+        regime_probs = self.regime_classifier.predict(
+            np.expand_dims(features[-1], 0),
+            verbose=0
+        )[0]
+        
+        metrics = ['coherence', 'innovation', 'conviction', 'stability']
+        next_metric = metrics[np.argmax(regime_probs)]
+        
+        if next_metric == self.current_regime.dominant_metric:
+            return None
+            
+        # Create rotation signal
+        return RotationSignal(
+            from_regime=self.current_regime,
+            to_regime=BeliefRegime(
+                dominant_metric=next_metric,
+                secondary_metric=self.current_regime.dominant_metric,
+                regime_strength=float(prediction[1]),
+                stability=float(prediction[2]),
+                momentum=float(prediction[3])
+            ),
+            confidence=confidence,
+            expected_duration=int(prediction[4]),
+            market_impact=float(max(regime_probs))
+        )
+    
+    def find_meta_index_spreads(self) -> List[MetaIndexSpread]:
+        """Find arbitrage opportunities between semantic indexes"""
+        spreads = []
+        indexes = self.analyzer.indexes
+        
+        for name1 in indexes:
+            for name2 in indexes:
+                if name1 >= name2:
+                    continue
+                    
+                # Calculate spread
+                spread = indexes[name1].value - indexes[name2].value
+                
+                # Calculate volatility
+                key = f"{name1}_{name2}"
+                if key not in self.spread_history:
+                    self.spread_history[key] = deque(maxlen=100)
+                self.spread_history[key].append(spread)
+                
+                volatility = np.std(list(self.spread_history[key]))
+                
+                # Calculate regime alignment
+                alignment = self._calculate_regime_alignment(
+                    indexes[name1],
+                    indexes[name2]
+                )
+                
+                spreads.append(MetaIndexSpread(
+                    long_index=name1,
+                    short_index=name2,
+                    spread=spread,
+                    volatility=volatility,
+                    regime_alignment=alignment
+                ))
+        
+        return sorted(
+            spreads,
+            key=lambda x: abs(x.spread) * x.regime_alignment,
+            reverse=True
+        )
+    
+    def _calculate_regime_alignment(
+        self,
+        index1: 'SemanticIndex',
+        index2: 'SemanticIndex'
+    ) -> float:
+        """Calculate how well spread aligns with current regime"""
+        if not self.current_regime:
+            return 0.0
+            
+        # Check if indexes align with regime metrics
+        primary_alignment = (
+            index1.metric_weights.__dict__[f"{self.current_regime.dominant_metric}_weight"] -
+            index2.metric_weights.__dict__[f"{self.current_regime.dominant_metric}_weight"]
+        )
+        
+        secondary_alignment = (
+            index1.metric_weights.__dict__[f"{self.current_regime.secondary_metric}_weight"] -
+            index2.metric_weights.__dict__[f"{self.current_regime.secondary_metric}_weight"]
+        )
+        
+        return float(primary_alignment + 0.5 * secondary_alignment)
+    
+    def execute_rotation_trades(self, rotation: RotationSignal):
+        """Execute trades based on rotation signal"""
+        # Close positions misaligned with new regime
+        for position_id in list(self.active_positions.keys()):
+            if not self._check_position_alignment(position_id, rotation):
+                self._close_position(position_id)
+        
+        # Find new opportunities
+        spreads = self.find_meta_index_spreads()
+        
+        # Open new positions aligned with rotation
+        for spread in spreads[:3]:  # Top 3 opportunities
+            if spread.regime_alignment > 0.7:
+                position_id = f"pos_{len(self.active_positions)}"
+                size = self._calculate_position_size(spread, rotation)
+                
+                if size > 0:
+                    self.active_positions[position_id] = size
+    
+    def _check_position_alignment(
+        self,
+        position_id: str,
+        rotation: RotationSignal
+    ) -> bool:
+        """Check if position aligns with new regime"""
+        # Implementation depends on position tracking details
+        return True  # Placeholder
+    
+    def _calculate_position_size(
+        self,
+        spread: MetaIndexSpread,
+        rotation: RotationSignal
+    ) -> float:
+        """Calculate position size for spread trade"""
+        # Base size on rotation confidence
+        base_size = rotation.confidence * 100  # Example scaling
+        
+        # Adjust for spread volatility
+        vol_adjust = 1.0 / (1.0 + spread.volatility)
+        
+        # Adjust for regime alignment
+        align_adjust = spread.regime_alignment
+        
+        return float(base_size * vol_adjust * align_adjust)
+    
+    def _close_position(self, position_id: str):
+        """Close a spread position"""
+        if position_id in self.active_positions:
+            self.position_history.append(
+                (position_id, self.active_positions[position_id])
+            )
+            del self.active_positions[position_id]
+
+def run_rotation_test():
+    """Test the belief rotation system"""
+    market = NeuroMarket()
+    analyzer = MetaMetricAnalyzer(market)
+    trader = BeliefRotationTrader(analyzer)
+    
+    # Create test indexes
+    analyzer.create_semantic_index(
+        "ConvictionIndex",
+        {
+            "conviction_stability": {"min": 0.7},
+            "coherence_score": {"min": 0.6}
+        }
+    )
+    
+    analyzer.create_semantic_index(
+        "InnovationIndex",
+        {
+            "innovation_alignment": {"min": 0.8},
+            "regulatory_risk": {"max": 0.3}
+        }
+    )
+    
+    # Run simulation
+    for i in range(100):
+        # Update market and analyzer
+        market.update_market_state()
+        analyzer.update_metric_weights()
+        analyzer.update_indexes()
+        
+        # Update belief regime
+        regime = trader.identify_current_regime()
+        
+        # Check for rotation
+        rotation = trader.predict_rotation()
+        if rotation:
+            trader.execute_rotation_trades(rotation)
+        
+        if i % 10 == 0:
+            print(f"\nStep {i}:")
+            print(f"Current Regime: {regime.dominant_metric}")
+            print(f"Regime Strength: {regime.regime_strength:.3f}")
+            if rotation:
+                print(f"Rotation Signal: {rotation.from_regime.dominant_metric} -> {rotation.to_regime.dominant_metric}")
+                print(f"Confidence: {rotation.confidence:.3f}")
+    
+    return market, analyzer, trader
+
+if __name__ == "__main__":
+    market, analyzer, trader = run_rotation_test()
