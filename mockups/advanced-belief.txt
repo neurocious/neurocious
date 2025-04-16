@@ -1,0 +1,480 @@
+import tensorflow as tf
+import numpy as np
+from dataclasses import dataclass
+from typing import Dict, List, Tuple, Optional
+from collections import deque
+import heapq
+
+@dataclass
+class MicroRegime:
+    primary_metric: str
+    secondary_metric: str
+    interaction_strength: float
+    local_volatility: float
+    entropy: float
+
+@dataclass
+class MacroRegime:
+    name: str
+    micro_regimes: List[MicroRegime]
+    stability: float
+    dominance: float
+    transition_probability: float
+
+@dataclass
+class RegimeState:
+    macro_regime: MacroRegime
+    micro_regime: MicroRegime
+    certainty: float
+    volatility_adjusted_confidence: float
+    entropy: float
+
+class AdvancedRegimeDetector:
+    def __init__(
+        self,
+        latent_dim: int = 8,
+        sequence_length: int = 20,
+        learning_rate: float = 0.001
+    ):
+        self.latent_dim = latent_dim
+        self.sequence_length = sequence_length
+        
+        # Neural components
+        self.regime_autoencoder = self._build_autoencoder()
+        self.hierarchical_classifier = self._build_hierarchical_classifier()
+        self.volatility_predictor = self._build_volatility_predictor()
+        
+        # State tracking
+        self.regime_history = deque(maxlen=1000)
+        self.volatility_history = deque(maxlen=100)
+        self.entropy_history = deque(maxlen=100)
+        
+        # Learned regime clusters
+        self.macro_regimes: Dict[str, MacroRegime] = {}
+        self.micro_regime_clusters = {}
+        
+    def _build_autoencoder(self) -> Tuple[tf.keras.Model, tf.keras.Model, tf.keras.Model]:
+        """Build VAE for regime clustering"""
+        # Encoder
+        encoder_inputs = tf.keras.Input(shape=(self.sequence_length, 10))
+        x = tf.keras.layers.LSTM(64, return_sequences=True)(encoder_inputs)
+        x = tf.keras.layers.LSTM(32)(x)
+        
+        # VAE parameters
+        z_mean = tf.keras.layers.Dense(self.latent_dim)(x)
+        z_log_var = tf.keras.layers.Dense(self.latent_dim)(x)
+        
+        # Sampling layer
+        class Sampling(tf.keras.layers.Layer):
+            def call(self, inputs):
+                z_mean, z_log_var = inputs
+                batch = tf.shape(z_mean)[0]
+                dim = tf.shape(z_mean)[1]
+                epsilon = tf.random.normal(shape=(batch, dim))
+                return z_mean + tf.exp(0.5 * z_log_var) * epsilon
+                
+        z = Sampling()([z_mean, z_log_var])
+        
+        # Build encoder model
+        encoder = tf.keras.Model(
+            encoder_inputs,
+            [z_mean, z_log_var, z],
+            name="encoder"
+        )
+        
+        # Decoder
+        latent_inputs = tf.keras.Input(shape=(self.latent_dim,))
+        x = tf.keras.layers.Dense(32, activation="relu")(latent_inputs)
+        x = tf.keras.layers.RepeatVector(self.sequence_length)(x)
+        x = tf.keras.layers.LSTM(64, return_sequences=True)(x)
+        decoder_outputs = tf.keras.layers.TimeDistributed(
+            tf.keras.layers.Dense(10)
+        )(x)
+        
+        decoder = tf.keras.Model(latent_inputs, decoder_outputs, name="decoder")
+        
+        # VAE model
+        vae = tf.keras.Model(
+            encoder_inputs,
+            decoder(encoder(encoder_inputs)[2])
+        )
+        
+        # Add VAE loss
+        def vae_loss(x, x_decoded_mean):
+            reconstruction_loss = tf.reduce_mean(
+                tf.reduce_sum(
+                    tf.keras.losses.mse(x, x_decoded_mean),
+                    axis=-1
+                )
+            )
+            kl_loss = -0.5 * tf.reduce_mean(
+                1 + z_log_var - tf.square(z_mean) - tf.exp(z_log_var)
+            )
+            return reconstruction_loss + kl_loss
+            
+        vae.compile(optimizer='adam', loss=vae_loss)
+        
+        return vae, encoder, decoder
+    
+    def _build_hierarchical_classifier(self) -> tf.keras.Model:
+        """Build hierarchical regime classifier"""
+        inputs = tf.keras.Input(shape=(self.sequence_length, 10))
+        
+        # Shared layers
+        shared = tf.keras.layers.LSTM(64, return_sequences=True)(inputs)
+        shared = tf.keras.layers.LSTM(32)(shared)
+        
+        # Macro regime branch
+        macro = tf.keras.layers.Dense(32, activation='relu')(shared)
+        macro = tf.keras.layers.Dropout(0.2)(macro)
+        macro_output = tf.keras.layers.Dense(
+            4,  # Number of macro regimes
+            activation='softmax',
+            name='macro_output'
+        )(macro)
+        
+        # Micro regime branch
+        micro = tf.keras.layers.Dense(32, activation='relu')(shared)
+        micro = tf.keras.layers.Dropout(0.2)(micro)
+        micro_output = tf.keras.layers.Dense(
+            8,  # Number of micro regimes
+            activation='softmax',
+            name='micro_output'
+        )(micro)
+        
+        model = tf.keras.Model(
+            inputs=inputs,
+            outputs=[macro_output, micro_output]
+        )
+        
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(0.001),
+            loss=['categorical_crossentropy', 'categorical_crossentropy'],
+            loss_weights=[1.0, 0.5]
+        )
+        return model
+    
+    def _build_volatility_predictor(self) -> tf.keras.Model:
+        """Build network for regime volatility prediction"""
+        model = tf.keras.Sequential([
+            tf.keras.layers.LSTM(32, input_shape=(None, 10)),
+            tf.keras.layers.Dense(16, activation='relu'),
+            tf.keras.layers.Dense(1, activation='sigmoid')
+        ])
+        
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(0.001),
+            loss='mse'
+        )
+        return model
+    
+    def detect_regime(
+        self,
+        market_state: np.ndarray,
+        metric_weights: Dict[str, float]
+    ) -> RegimeState:
+        """Detect current regime state with uncertainty"""
+        # Prepare sequence data
+        sequence = self._prepare_sequence(market_state, metric_weights)
+        
+        # Get latent representation
+        z_mean, z_log_var, z = self.regime_autoencoder[1].predict(
+            np.expand_dims(sequence, 0),
+            verbose=0
+        )
+        
+        # Get regime classifications
+        macro_probs, micro_probs = self.hierarchical_classifier.predict(
+            np.expand_dims(sequence, 0),
+            verbose=0
+        )
+        
+        # Calculate entropy
+        macro_entropy = self._calculate_entropy(macro_probs[0])
+        micro_entropy = self._calculate_entropy(micro_probs[0])
+        
+        # Predict volatility
+        volatility = float(self.volatility_predictor.predict(
+            np.expand_dims(sequence, 0),
+            verbose=0
+        )[0])
+        
+        # Identify regimes
+        macro_regime = self._identify_macro_regime(
+            macro_probs[0],
+            z_mean[0]
+        )
+        micro_regime = self._identify_micro_regime(
+            micro_probs[0],
+            z_mean[0]
+        )
+        
+        # Calculate certainty
+        certainty = self._calculate_regime_certainty(
+            macro_entropy,
+            micro_entropy,
+            volatility
+        )
+        
+        # Adjust confidence based on volatility
+        vol_adjusted_confidence = self._volatility_adjust_confidence(
+            certainty,
+            volatility
+        )
+        
+        regime_state = RegimeState(
+            macro_regime=macro_regime,
+            micro_regime=micro_regime,
+            certainty=certainty,
+            volatility_adjusted_confidence=vol_adjusted_confidence,
+            entropy=float(macro_entropy + micro_entropy) / 2
+        )
+        
+        self.regime_history.append(regime_state)
+        self.volatility_history.append(volatility)
+        self.entropy_history.append(regime_state.entropy)
+        
+        return regime_state
+    
+    def _prepare_sequence(
+        self,
+        market_state: np.ndarray,
+        metric_weights: Dict[str, float]
+    ) -> np.ndarray:
+        """Prepare input sequence for regime detection"""
+        if len(self.regime_history) < self.sequence_length:
+            # Pad with current state if history is too short
+            padding = np.tile(
+                np.concatenate([market_state, list(metric_weights.values())]),
+                (self.sequence_length - len(self.regime_history), 1)
+            )
+            history = [
+                np.concatenate([
+                    market_state,
+                    list(metric_weights.values())
+                ])
+                for _ in range(len(self.regime_history))
+            ]
+            sequence = np.vstack([padding, history])
+        else:
+            sequence = np.array([
+                np.concatenate([
+                    market_state,
+                    list(metric_weights.values())
+                ])
+                for _ in range(self.sequence_length)
+            ])
+        
+        return sequence
+    
+    def _calculate_entropy(self, probs: np.ndarray) -> float:
+        """Calculate entropy of probability distribution"""
+        return float(-np.sum(probs * np.log(probs + 1e-10)))
+    
+    def _identify_macro_regime(
+        self,
+        probs: np.ndarray,
+        latent: np.ndarray
+    ) -> MacroRegime:
+        """Identify macro regime from probabilities and latent space"""
+        # Define base regimes
+        regime_types = [
+            "conviction-led",
+            "innovation-driven",
+            "stability-focused",
+            "mixed-belief"
+        ]
+        
+        # Get dominant regime
+        regime_idx = np.argmax(probs)
+        regime_name = regime_types[regime_idx]
+        
+        # Find associated micro regimes
+        micro_regimes = self._cluster_micro_regimes(latent)
+        
+        # Calculate regime metrics
+        stability = 1.0 - self._calculate_entropy(probs)
+        dominance = float(probs[regime_idx])
+        transition_prob = self._calculate_transition_probability(regime_name)
+        
+        return MacroRegime(
+            name=regime_name,
+            micro_regimes=micro_regimes,
+            stability=stability,
+            dominance=dominance,
+            transition_probability=transition_prob
+        )
+    
+    def _identify_micro_regime(
+        self,
+        probs: np.ndarray,
+        latent: np.ndarray
+    ) -> MicroRegime:
+        """Identify micro regime from probabilities and latent space"""
+        # Get top two components
+        top_indices = np.argsort(probs)[-2:]
+        metrics = ['conviction', 'innovation', 'stability', 'coherence']
+        
+        interaction = self._calculate_interaction_strength(
+            latent,
+            top_indices
+        )
+        
+        volatility = self._calculate_local_volatility(top_indices)
+        entropy = self._calculate_entropy(probs)
+        
+        return MicroRegime(
+            primary_metric=metrics[top_indices[1]],
+            secondary_metric=metrics[top_indices[0]],
+            interaction_strength=interaction,
+            local_volatility=volatility,
+            entropy=entropy
+        )
+    
+    def _cluster_micro_regimes(
+        self,
+        latent: np.ndarray
+    ) -> List[MicroRegime]:
+        """Cluster micro regimes in latent space"""
+        # Use recent history to identify clusters
+        if len(self.regime_history) < 2:
+            return []
+            
+        recent_regimes = [
+            r.micro_regime for r in list(self.regime_history)[-10:]
+        ]
+        
+        # Group similar micro regimes
+        clusters = {}
+        for regime in recent_regimes:
+            key = (regime.primary_metric, regime.secondary_metric)
+            if key not in clusters:
+                clusters[key] = []
+            clusters[key].append(regime)
+        
+        # Return representative regime from each cluster
+        return [
+            self._average_micro_regimes(cluster)
+            for cluster in clusters.values()
+        ]
+    
+    def _average_micro_regimes(
+        self,
+        regimes: List[MicroRegime]
+    ) -> MicroRegime:
+        """Average multiple micro regimes"""
+        return MicroRegime(
+            primary_metric=regimes[0].primary_metric,
+            secondary_metric=regimes[0].secondary_metric,
+            interaction_strength=np.mean([r.interaction_strength for r in regimes]),
+            local_volatility=np.mean([r.local_volatility for r in regimes]),
+            entropy=np.mean([r.entropy for r in regimes])
+        )
+    
+    def _calculate_interaction_strength(
+        self,
+        latent: np.ndarray,
+        indices: np.ndarray
+    ) -> float:
+        """Calculate interaction strength between regime components"""
+        # Use latent space distance as proxy for interaction
+        component_vectors = latent[indices]
+        return float(np.dot(component_vectors[0], component_vectors[1]))
+    
+    def _calculate_local_volatility(
+        self,
+        indices: np.ndarray
+    ) -> float:
+        """Calculate local volatility of regime components"""
+        if len(self.regime_history) < 2:
+            return 0.0
+            
+        recent_states = list(self.regime_history)[-10:]
+        volatilities = [s.micro_regime.local_volatility for s in recent_states]
+        return float(np.std(volatilities))
+    
+    def _calculate_transition_probability(
+        self,
+        regime_name: str
+    ) -> float:
+        """Calculate probability of regime transition"""
+        if len(self.regime_history) < 2:
+            return 0.0
+            
+        # Count recent transitions
+        transitions = 0
+        for i in range(1, len(self.regime_history)):
+            if (self.regime_history[i].macro_regime.name !=
+                self.regime_history[i-1].macro_regime.name):
+                transitions += 1
+                
+        return transitions / len(self.regime_history)
+    
+    def _calculate_regime_certainty(
+        self,
+        macro_entropy: float,
+        micro_entropy: float,
+        volatility: float
+    ) -> float:
+        """Calculate overall regime certainty"""
+        # Combine entropy measures
+        total_entropy = (macro_entropy + micro_entropy) / 2
+        
+        # Adjust for volatility
+        certainty = 1.0 - total_entropy
+        certainty *= (1.0 - volatility)
+        
+        return float(max(0.0, min(1.0, certainty)))
+    
+    def _volatility_adjust_confidence(
+        self,
+        base_confidence: float,
+        current_volatility: float
+    ) -> float:
+        """Adjust confidence based on volatility"""
+        if len(self.volatility_history) < 2:
+            return base_confidence
+            
+        # Calculate volatility trend
+        vol_trend = (
+            current_volatility /
+            np.mean(list(self.volatility_history))
+        )
+        
+        # Dampen confidence if volatility is increasing
+        if vol_trend > 1.2:  # Significant increase
+            return base_confidence * (1.0 / vol_trend)
+        
+        return base_confidence
+
+def run_regime_test():
+    """Test the advanced regime detection system"""
+    detector = AdvancedRegimeDetector()
+    
+    # Generate test data
+    for i in range(100):
+        # Simulate market state
+        market_state = np.random.random(5)
+        
+        # Simulate metric weights
+        weights = {
+            'conviction': 0.3 + 0.1 * np.sin(i/10),
+            'innovation': 0.2 + 0.1 * np.cos(i/10),
+            'stability': 0.25 + 0.05 * np.sin(i/5),
+            'coherence': 0.25 + 0.05 * np.cos(i/5)
+        }
+        
+        # Detect regime
+        regime_state = detector.detect_regime(market_state, weights)
+        
+        if i % 10 == 0:
+            print(f"\nStep {i}:")
+            print(f"Macro Regime: {regime_state.macro_regime.name}")
+            print(f"Micro Primary: {regime_state.micro_regime.primary_metric}")
+            print(f"Certainty: {regime_state.certainty:.3f}")
+            print(f"Vol-Adjusted Confidence: {regime_state.volatility_adjusted_confidence:.3f}")
+    
+    return detector
+
+if __name__ == "__main__":
+    detector = run_regime_test()
