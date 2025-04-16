@@ -1,0 +1,354 @@
+import tensorflow as tf
+import numpy as np
+from dataclasses import dataclass
+from typing import Dict, List, Tuple, Optional
+from collections import deque
+import heapq
+
+@dataclass
+class ListingMetrics:
+    coherence_score: float
+    fork_tension: float
+    conviction_stability: float
+    regulatory_risk: float
+    innovation_alignment: float
+    semantic_value: float
+
+@dataclass
+class MarketState:
+    health_index: float
+    systemic_risk: float
+    collective_conviction: float
+    prediction_consensus: float
+    reflex_state: Dict[str, float]
+
+class NeuroMarket:
+    def __init__(
+        self,
+        min_coherence: float = 0.6,
+        base_margin: float = 0.2,
+        learning_rate: float = 0.001
+    ):
+        self.min_coherence = min_coherence
+        self.base_margin = base_margin
+        
+        # Core components
+        self.listings: Dict[str, ListingMetrics] = {}
+        self.market_state = self._initialize_market_state()
+        
+        # Neural components
+        self.listing_evaluator = self._build_listing_evaluator()
+        self.risk_predictor = self._build_risk_predictor()
+        self.reflex_controller = self._build_reflex_controller()
+        
+        # Market tracking
+        self.state_history = deque(maxlen=1000)
+        self.circuit_breaks = deque(maxlen=100)
+        self.semantic_etfs: Dict[str, List[str]] = {}
+        
+    def _initialize_market_state(self) -> MarketState:
+        """Initialize market state with default values"""
+        return MarketState(
+            health_index=1.0,
+            systemic_risk=0.0,
+            collective_conviction=1.0,
+            prediction_consensus=1.0,
+            reflex_state={
+                'circuit_breaker': 0.0,
+                'margin_multiplier': 1.0,
+                'listing_threshold': 1.0,
+                'innovation_gate': 1.0,
+                'regulatory_shield': 1.0
+            }
+        )
+    
+    def _build_listing_evaluator(self) -> tf.keras.Model:
+        """Build neural network for listing evaluation"""
+        model = tf.keras.Sequential([
+            tf.keras.layers.Dense(64, input_dim=10),
+            tf.keras.layers.LeakyReLU(),
+            tf.keras.layers.Dropout(0.2),
+            tf.keras.layers.Dense(32),
+            tf.keras.layers.LeakyReLU(),
+            tf.keras.layers.Dense(6)  # Metrics output
+        ])
+        
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(0.001),
+            loss='mse'
+        )
+        return model
+    
+    def _build_risk_predictor(self) -> tf.keras.Model:
+        """Build network for systemic risk prediction"""
+        model = tf.keras.Sequential([
+            tf.keras.layers.LSTM(64, input_shape=(None, 20)),
+            tf.keras.layers.Dense(32),
+            tf.keras.layers.LeakyReLU(),
+            tf.keras.layers.Dense(16),
+            tf.keras.layers.LeakyReLU(),
+            tf.keras.layers.Dense(4)  # Risk components
+        ])
+        
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(0.001),
+            loss='mse'
+        )
+        return model
+    
+    def _build_reflex_controller(self) -> tf.keras.Model:
+        """Build network for market reflexes"""
+        model = tf.keras.Sequential([
+            tf.keras.layers.Dense(32, input_dim=10),
+            tf.keras.layers.LeakyReLU(),
+            tf.keras.layers.Dense(16),
+            tf.keras.layers.LeakyReLU(),
+            tf.keras.layers.Dense(5)  # Reflex controls
+        ])
+        
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(0.001),
+            loss='mse'
+        )
+        return model
+
+    def evaluate_listing(
+        self,
+        ticker: str,
+        metrics: Dict
+    ) -> Tuple[bool, ListingMetrics]:
+        """Evaluate a new listing request"""
+        # Prepare input features
+        features = [
+            metrics.get('revenue_growth', 0),
+            metrics.get('market_share', 0),
+            metrics.get('innovation_score', 0),
+            metrics.get('regulatory_compliance', 0),
+            metrics.get('tech_adoption', 0),
+            metrics.get('market_sentiment', 0),
+            self.market_state.health_index,
+            self.market_state.systemic_risk,
+            self.market_state.collective_conviction,
+            self.market_state.prediction_consensus
+        ]
+        
+        # Get neural evaluation
+        evaluation = self.listing_evaluator.predict(
+            np.expand_dims(features, 0),
+            verbose=0
+        )[0]
+        
+        # Create metrics
+        listing_metrics = ListingMetrics(
+            coherence_score=float(evaluation[0]),
+            fork_tension=float(evaluation[1]),
+            conviction_stability=float(evaluation[2]),
+            regulatory_risk=float(evaluation[3]),
+            innovation_alignment=float(evaluation[4]),
+            semantic_value=float(evaluation[5])
+        )
+        
+        # Check if listing meets requirements
+        meets_requirements = (
+            listing_metrics.coherence_score >= self.min_coherence and
+            listing_metrics.fork_tension < 0.3 and
+            listing_metrics.conviction_stability > 0.7
+        )
+        
+        return meets_requirements, listing_metrics
+    
+    def update_market_state(self):
+        """Update market state based on current conditions"""
+        if not self.listings:
+            return
+        
+        # Calculate aggregate metrics
+        coherence = np.mean([m.coherence_score for m in self.listings.values()])
+        fork_tension = np.mean([m.fork_tension for m in self.listings.values()])
+        conviction = np.mean([m.conviction_stability for m in self.listings.values()])
+        
+        # Predict systemic risk
+        risk_features = np.array([
+            [coherence, fork_tension, conviction, len(self.listings)]
+            for _ in range(10)  # Sequence length
+        ])
+        predicted_risk = self.risk_predictor.predict(
+            np.expand_dims(risk_features, 0),
+            verbose=0
+        )[0]
+        
+        # Update market state
+        self.market_state = MarketState(
+            health_index=float(coherence * conviction),
+            systemic_risk=float(predicted_risk[0]),
+            collective_conviction=float(conviction),
+            prediction_consensus=float(1.0 - fork_tension),
+            reflex_state=self._update_reflexes()
+        )
+        
+        self.state_history.append(self.market_state)
+    
+    def _update_reflexes(self) -> Dict[str, float]:
+        """Update market reflex states"""
+        if len(self.state_history) < 2:
+            return self.market_state.reflex_state.copy()
+        
+        # Prepare reflex features
+        features = [
+            self.market_state.health_index,
+            self.market_state.systemic_risk,
+            self.market_state.collective_conviction,
+            self.market_state.prediction_consensus,
+            len(self.circuit_breaks) / 100,  # Recent circuit break frequency
+            len(self.listings) / 1000,  # Market size factor
+            # Add more features...
+        ]
+        
+        # Get reflex updates
+        reflexes = self.reflex_controller.predict(
+            np.expand_dims(features, 0),
+            verbose=0
+        )[0]
+        
+        return {
+            'circuit_breaker': float(reflexes[0]),
+            'margin_multiplier': float(reflexes[1]),
+            'listing_threshold': float(reflexes[2]),
+            'innovation_gate': float(reflexes[3]),
+            'regulatory_shield': float(reflexes[4])
+        }
+    
+    def check_circuit_breaker(self) -> Tuple[bool, str]:
+        """Check if circuit breaker should trigger"""
+        if self.market_state.reflex_state['circuit_breaker'] > 0.7:
+            reason = self._get_circuit_breaker_reason()
+            self.circuit_breaks.append((reason, len(self.state_history)))
+            return True, reason
+        return False, "Market operating normally"
+    
+    def _get_circuit_breaker_reason(self) -> str:
+        """Determine reason for circuit breaker"""
+        state = self.market_state
+        if state.health_index < 0.4:
+            return "Critical health index"
+        elif state.systemic_risk > 0.7:
+            return "High systemic risk"
+        elif state.prediction_consensus < 0.3:
+            return "Consensus collapse"
+        elif state.collective_conviction < 0.4:
+            return "Low conviction"
+        return "Multiple factors"
+    
+    def create_semantic_etf(
+        self,
+        name: str,
+        criteria: Dict[str, float]
+    ) -> Optional[str]:
+        """Create a new semantic ETF"""
+        qualifying_listings = []
+        
+        for ticker, metrics in self.listings.items():
+            # Check if listing meets ETF criteria
+            if (metrics.coherence_score >= criteria.get('min_coherence', 0) and
+                metrics.innovation_alignment >= criteria.get('min_innovation', 0) and
+                metrics.regulatory_risk <= criteria.get('max_regulatory_risk', 1)):
+                qualifying_listings.append(ticker)
+        
+        if not qualifying_listings:
+            return None
+            
+        etf_id = f"ETF_{len(self.semantic_etfs)}"
+        self.semantic_etfs[etf_id] = qualifying_listings
+        
+        return etf_id
+    
+    def get_market_analytics(self) -> Dict:
+        """Get comprehensive market analytics"""
+        return {
+            "market_state": {
+                "health_index": self.market_state.health_index,
+                "systemic_risk": self.market_state.systemic_risk,
+                "conviction": self.market_state.collective_conviction,
+                "consensus": self.market_state.prediction_consensus
+            },
+            "listings": {
+                "total": len(self.listings),
+                "avg_coherence": np.mean([
+                    m.coherence_score for m in self.listings.values()
+                ]) if self.listings else 0,
+                "avg_innovation": np.mean([
+                    m.innovation_alignment for m in self.listings.values()
+                ]) if self.listings else 0
+            },
+            "circuit_breaks": {
+                "last_24h": sum(
+                    1 for b in self.circuit_breaks
+                    if len(self.state_history) - b[1] < 24
+                ),
+                "reasons": dict(self.circuit_breaks)[-5:]
+            },
+            "semantic_etfs": {
+                etf_id: len(components)
+                for etf_id, components in self.semantic_etfs.items()
+            }
+        }
+
+def run_market_test():
+    """Test the NeuroMarket system"""
+    market = NeuroMarket()
+    
+    # Test listings
+    test_companies = [
+        ("TECH1", {
+            "revenue_growth": 0.8,
+            "market_share": 0.3,
+            "innovation_score": 0.9,
+            "regulatory_compliance": 0.95,
+            "tech_adoption": 0.85,
+            "market_sentiment": 0.7
+        }),
+        ("AI2", {
+            "revenue_growth": 0.6,
+            "market_share": 0.1,
+            "innovation_score": 0.95,
+            "regulatory_compliance": 0.8,
+            "tech_adoption": 0.9,
+            "market_sentiment": 0.8
+        })
+    ]
+    
+    for ticker, metrics in test_companies:
+        approved, listing_metrics = market.evaluate_listing(ticker, metrics)
+        if approved:
+            market.listings[ticker] = listing_metrics
+    
+    # Run market simulation
+    for i in range(100):
+        market.update_market_state()
+        
+        # Check circuit breakers
+        triggered, reason = market.check_circuit_breaker()
+        
+        # Create test ETF
+        if i == 50:
+            etf_id = market.create_semantic_etf(
+                "InnovationETF",
+                {
+                    "min_coherence": 0.7,
+                    "min_innovation": 0.8,
+                    "max_regulatory_risk": 0.3
+                }
+            )
+        
+        if i % 10 == 0:
+            print(f"\nStep {i}:")
+            analytics = market.get_market_analytics()
+            print("Market Health:", analytics["market_state"]["health_index"])
+            print("Systemic Risk:", analytics["market_state"]["systemic_risk"])
+            if triggered:
+                print(f"Circuit Breaker: {reason}")
+    
+    return market
+
+if __name__ == "__main__":
+    market = run_market_test()
