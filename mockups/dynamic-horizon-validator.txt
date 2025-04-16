@@ -1,0 +1,371 @@
+import tensorflow as tf
+import numpy as np
+from dataclasses import dataclass
+from typing import Dict, List, Tuple, Optional
+from collections import deque
+import random
+
+@dataclass
+class MarketCondition:
+    field_entropy: float
+    volatility: float
+    recent_accuracy: Dict[int, float]
+    global_consensus: float
+
+@dataclass
+class HorizonStrategy:
+    horizon: int
+    confidence: float
+    expected_return: float
+    stake_fraction: float
+
+class HorizonSelector:
+    def __init__(
+        self,
+        min_horizon: int = 1,
+        max_horizon: int = 50,
+        learning_rate: float = 0.01
+    ):
+        self.min_horizon = min_horizon
+        self.max_horizon = max_horizon
+        self.learning_rate = learning_rate
+        
+        # Strategy network for horizon selection
+        self.strategy_network = self._build_strategy_network()
+        
+        # Experience buffer for meta-learning
+        self.horizon_experience = deque(maxlen=1000)
+        
+        # Performance tracking
+        self.horizon_returns = {}  # horizon -> average return
+        self.specialization_score = 0.0  # How specialized is this validator
+        
+    def _build_strategy_network(self) -> tf.keras.Model:
+        """Build network for horizon selection strategy"""
+        model = tf.keras.Sequential([
+            # Input features: entropy, volatility, historical performance
+            tf.keras.layers.Dense(64, input_dim=10),
+            tf.keras.layers.LeakyReLU(),
+            tf.keras.layers.Dense(64),
+            tf.keras.layers.LeakyReLU(),
+            # Output: horizon distribution parameters
+            tf.keras.layers.Dense(3)  # [mean, std, confidence]
+        ])
+        
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(self.learning_rate),
+            loss='mse'
+        )
+        return model
+        
+    def select_horizons(
+        self,
+        market_condition: MarketCondition,
+        num_predictions: int = 3
+    ) -> List[HorizonStrategy]:
+        """Select multiple prediction horizons based on market conditions"""
+        # Prepare input features
+        features = self._encode_market_condition(market_condition)
+        
+        # Get distribution parameters from strategy network
+        params = self.strategy_network.predict(
+            tf.expand_dims(features, 0),
+            verbose=0
+        )[0]
+        
+        mean_horizon = tf.sigmoid(params[0]) * self.max_horizon
+        std_horizon = tf.sigmoid(params[1]) * (self.max_horizon / 4)
+        base_confidence = tf.sigmoid(params[2])
+        
+        strategies = []
+        for _ in range(num_predictions):
+            # Sample horizon from learned distribution
+            horizon = int(np.clip(
+                np.random.normal(mean_horizon, std_horizon),
+                self.min_horizon,
+                self.max_horizon
+            ))
+            
+            # Calculate confidence and stake based on historical performance
+            horizon_performance = market_condition.recent_accuracy.get(
+                horizon,
+                0.5  # Default for new horizons
+            )
+            
+            confidence = base_confidence * (
+                0.5 + 0.5 * horizon_performance
+            )
+            
+            # Adjust expected return based on horizon length
+            expected_return = self._estimate_return(
+                horizon,
+                market_condition
+            )
+            
+            # Calculate optimal stake fraction
+            stake_fraction = self._calculate_stake_fraction(
+                confidence,
+                expected_return,
+                horizon
+            )
+            
+            strategies.append(HorizonStrategy(
+                horizon=horizon,
+                confidence=float(confidence),
+                expected_return=float(expected_return),
+                stake_fraction=float(stake_fraction)
+            ))
+        
+        return strategies
+    
+    def _encode_market_condition(
+        self,
+        condition: MarketCondition
+    ) -> tf.Tensor:
+        """Encode market condition into network input"""
+        features = [
+            condition.field_entropy,
+            condition.volatility,
+            condition.global_consensus,
+            # Encode recent accuracy for key horizons
+            *[condition.recent_accuracy.get(h, 0.0)
+              for h in [1, 5, 10, 20, 50]],
+            # Trend indicators
+            np.mean(list(condition.recent_accuracy.values())),
+            np.std(list(condition.recent_accuracy.values())),
+        ]
+        return tf.constant(features, dtype=tf.float32)
+    
+    def _estimate_return(
+        self,
+        horizon: int,
+        condition: MarketCondition
+    ) -> float:
+        """Estimate expected return for a horizon"""
+        # Base return from historical performance
+        base_return = self.horizon_returns.get(horizon, 1.0)
+        
+        # Adjust for market conditions
+        volatility_factor = np.exp(-condition.volatility * horizon/10)
+        entropy_factor = np.exp(-condition.field_entropy * horizon/10)
+        
+        return base_return * volatility_factor * entropy_factor
+    
+    def _calculate_stake_fraction(
+        self,
+        confidence: float,
+        expected_return: float,
+        horizon: int
+    ) -> float:
+        """Calculate optimal stake fraction using Kelly Criterion"""
+        win_prob = confidence
+        win_ratio = expected_return
+        
+        # Modified Kelly Criterion with horizon adjustment
+        kelly = (win_prob * win_ratio - (1 - win_prob)) / win_ratio
+        
+        # Reduce stake for longer horizons (capital efficiency)
+        horizon_discount = np.exp(-horizon / 20)
+        
+        # Conservative fraction of Kelly criterion
+        return max(0.0, min(0.25 * kelly * horizon_discount, 0.5))
+    
+    def update_strategy(
+        self,
+        condition: MarketCondition,
+        selected_horizons: List[HorizonStrategy],
+        outcomes: List[Tuple[int, float, float]]  # horizon, reward, accuracy
+    ):
+        """Update horizon selection strategy based on outcomes"""
+        # Update horizon returns
+        for horizon, reward, accuracy in outcomes:
+            if horizon not in self.horizon_returns:
+                self.horizon_returns[horizon] = reward
+            else:
+                self.horizon_returns[horizon] = (
+                    0.95 * self.horizon_returns[horizon] +
+                    0.05 * reward
+                )
+        
+        # Store experience
+        self.horizon_experience.append((
+            self._encode_market_condition(condition),
+            selected_horizons,
+            outcomes
+        ))
+        
+        # Update strategy network if enough experience
+        if len(self.horizon_experience) >= 32:
+            self._train_strategy_network()
+        
+        # Update specialization score
+        self._update_specialization()
+    
+    def _train_strategy_network(self):
+        """Train horizon selection strategy"""
+        batch = random.sample(self.horizon_experience, 32)
+        
+        X = tf.stack([exp[0] for exp in batch])
+        
+        # Compute target distribution parameters
+        y = []
+        for _, strategies, outcomes in batch:
+            # Find best performing horizon
+            best_horizon = max(
+                outcomes,
+                key=lambda x: x[1]  # reward
+            )[0]
+            
+            # Create target distribution centered on best horizon
+            mean_horizon = best_horizon / self.max_horizon
+            std_horizon = 0.1  # Start tight, let network learn proper width
+            confidence = np.mean([o[2] for o in outcomes])  # avg accuracy
+            
+            y.append([mean_horizon, std_horizon, confidence])
+        
+        y = tf.constant(y, dtype=tf.float32)
+        
+        # Train network
+        self.strategy_network.train_on_batch(X, y)
+    
+    def _update_specialization(self):
+        """Update validator specialization score"""
+        if not self.horizon_returns:
+            return
+        
+        # Calculate horizon return distribution
+        returns = np.array(list(self.horizon_returns.values()))
+        horizons = np.array(list(self.horizon_returns.keys()))
+        
+        # Compute specialization based on return concentration
+        normalized_returns = returns / np.sum(returns)
+        entropy = -np.sum(
+            normalized_returns * np.log(normalized_returns + 1e-10)
+        )
+        
+        # High entropy = generalist, Low entropy = specialist
+        self.specialization_score = 1.0 - (
+            entropy / np.log(len(returns))
+        )
+
+class AdaptiveTimeScaleValidator:
+    def __init__(
+        self,
+        field_shape: Tuple[int, ...],
+        vector_dims: int,
+        initial_stake: float = 1000.0
+    ):
+        self.field_shape = field_shape
+        self.vector_dims = vector_dims
+        self.stake = initial_stake
+        
+        # Core components
+        self.horizon_selector = HorizonSelector()
+        self.predictors = {}  # horizon -> predictor model
+        
+        # State tracking
+        self.current_field = tf.Variable(
+            tf.nn.l2_normalize(
+                tf.random.normal(field_shape + (vector_dims,)),
+                axis=-1
+            )
+        )
+        self.field_history = deque(maxlen=100)
+        self.active_predictions = {}
+        
+    def predict(self, market_condition: MarketCondition):
+        """Make predictions using dynamic horizon selection"""
+        # Select prediction horizons
+        strategies = self.horizon_selector.select_horizons()
+        
+        predictions = []
+        for strategy in strategies:
+            # Ensure we have a predictor for this horizon
+            if strategy.horizon not in self.predictors:
+                self.predictors[strategy.horizon] = self._create_predictor()
+            
+            # Make prediction
+            predicted_field = self.predictors[strategy.horizon](
+                tf.expand_dims(self.current_field, 0)
+            )[0]
+            
+            # Record prediction
+            self.active_predictions[strategy.horizon] = {
+                'field': predicted_field,
+                'confidence': strategy.confidence,
+                'stake': self.stake * strategy.stake_fraction
+            }
+            
+            predictions.append((
+                strategy.horizon,
+                predicted_field,
+                strategy.confidence
+            ))
+        
+        return predictions, strategies
+    
+    def _create_predictor(self) -> tf.keras.Model:
+        """Create a new predictor model"""
+        return tf.keras.Sequential([
+            tf.keras.layers.Conv2D(
+                64, (3, 3), padding='same',
+                input_shape=self.field_shape + (self.vector_dims,)
+            ),
+            tf.keras.layers.LeakyReLU(),
+            tf.keras.layers.LSTM(128),
+            tf.keras.layers.Dense(
+                np.prod(self.field_shape + (self.vector_dims,))
+            ),
+            tf.keras.layers.Reshape(
+                self.field_shape + (self.vector_dims,)
+            )
+        ])
+
+def run_adaptive_test():
+    """Test the adaptive time scale validator"""
+    validator = AdaptiveTimeScaleValidator(
+        field_shape=(4, 4),
+        vector_dims=3
+    )
+    
+    # Simulate market conditions
+    for i in range(100):
+        condition = MarketCondition(
+            field_entropy=random.random(),
+            volatility=0.1 + 0.2 * np.sin(i/10),  # Cyclical volatility
+            recent_accuracy={
+                1: 0.7,
+                5: 0.6,
+                10: 0.5,
+                20: 0.4
+            },
+            global_consensus=0.8
+        )
+        
+        # Make predictions
+        predictions, strategies = validator.predict(condition)
+        
+        # Simulate outcomes
+        outcomes = [
+            (s.horizon, random.random(), random.random())
+            for s in strategies
+        ]
+        
+        # Update strategy
+        validator.horizon_selector.update_strategy(
+            condition,
+            strategies,
+            outcomes
+        )
+        
+        if i % 10 == 0:
+            print(f"\nIteration {i}:")
+            print("Specialization Score:", 
+                  validator.horizon_selector.specialization_score)
+            print("Selected Horizons:", 
+                  [s.horizon for s in strategies])
+    
+    return validator
+
+if __name__ == "__main__":
+    validator = run_adaptive_test()
