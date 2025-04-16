@@ -1,0 +1,463 @@
+import tensorflow as tf
+import numpy as np
+from dataclasses import dataclass
+from typing import Dict, List, Tuple, Optional
+from collections import deque
+import heapq
+
+@dataclass
+class ArbitrageOpportunity:
+    source_id: str
+    target_id: str
+    metric: str
+    spread: float
+    confidence: float
+    expected_profit: float
+    risk_score: float
+    convergence_time: int
+
+@dataclass
+class SemanticPosition:
+    position_id: str
+    long_id: str
+    short_id: str
+    metric: str
+    size: float
+    entry_spread: float
+    current_spread: float
+    profit_loss: float
+    confidence: float
+    entry_time: int
+
+class SemanticArbitrageur:
+    def __init__(
+        self,
+        market: 'NeuroMarket',
+        initial_capital: float = 1000.0,
+        min_spread: float = 0.1,
+        max_positions: int = 5
+    ):
+        self.market = market
+        self.capital = initial_capital
+        self.min_spread = min_spread
+        self.max_positions = max_positions
+        
+        # Portfolio tracking
+        self.active_positions: Dict[str, SemanticPosition] = {}
+        self.position_history = deque(maxlen=1000)
+        self.metric_performance: Dict[str, float] = {}
+        
+        # Neural components
+        self.spread_predictor = self._build_spread_predictor()
+        self.risk_evaluator = self._build_risk_evaluator()
+        self.convergence_predictor = self._build_convergence_predictor()
+        
+    def _build_spread_predictor(self) -> tf.keras.Model:
+        """Build network for spread prediction"""
+        model = tf.keras.Sequential([
+            tf.keras.layers.Dense(64, input_dim=15),
+            tf.keras.layers.LeakyReLU(),
+            tf.keras.layers.Dropout(0.2),
+            tf.keras.layers.Dense(32),
+            tf.keras.layers.LeakyReLU(),
+            tf.keras.layers.Dense(1)
+        ])
+        
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(0.001),
+            loss='mse'
+        )
+        return model
+    
+    def _build_risk_evaluator(self) -> tf.keras.Model:
+        """Build network for risk evaluation"""
+        model = tf.keras.Sequential([
+            tf.keras.layers.Dense(32, input_dim=10),
+            tf.keras.layers.LeakyReLU(),
+            tf.keras.layers.Dense(16),
+            tf.keras.layers.LeakyReLU(),
+            tf.keras.layers.Dense(1, activation='sigmoid')
+        ])
+        
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(0.001),
+            loss='binary_crossentropy'
+        )
+        return model
+    
+    def _build_convergence_predictor(self) -> tf.keras.Model:
+        """Build network for convergence time prediction"""
+        model = tf.keras.Sequential([
+            tf.keras.layers.LSTM(32, input_shape=(None, 10)),
+            tf.keras.layers.Dense(16),
+            tf.keras.layers.LeakyReLU(),
+            tf.keras.layers.Dense(1)
+        ])
+        
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(0.001),
+            loss='mse'
+        )
+        return model
+    
+    def find_opportunities(self) -> List[ArbitrageOpportunity]:
+        """Find semantic arbitrage opportunities"""
+        opportunities = []
+        
+        # Define metrics to compare
+        metrics = [
+            'coherence_score',
+            'innovation_alignment',
+            'conviction_stability',
+            'semantic_value'
+        ]
+        
+        # Compare all listing pairs
+        listings = list(self.market.listings.items())
+        for i, (id1, metrics1) in enumerate(listings):
+            for id2, metrics2 in listings[i+1:]:
+                for metric in metrics:
+                    # Calculate raw spread
+                    spread = getattr(metrics1, metric) - getattr(metrics2, metric)
+                    
+                    if abs(spread) < self.min_spread:
+                        continue
+                    
+                    # Predict spread evolution
+                    future_spread = self._predict_spread(
+                        id1, id2, metric, spread
+                    )
+                    
+                    # Calculate confidence and risk
+                    confidence = self._calculate_confidence(
+                        id1, id2, metric, spread
+                    )
+                    risk_score = self._evaluate_risk(
+                        id1, id2, metric, spread
+                    )
+                    
+                    # Predict convergence time
+                    conv_time = self._predict_convergence_time(
+                        id1, id2, metric, spread
+                    )
+                    
+                    # Calculate expected profit
+                    profit = self._calculate_expected_profit(
+                        spread,
+                        future_spread,
+                        confidence,
+                        conv_time
+                    )
+                    
+                    if profit > 0:
+                        opportunities.append(ArbitrageOpportunity(
+                            source_id=id1,
+                            target_id=id2,
+                            metric=metric,
+                            spread=spread,
+                            confidence=confidence,
+                            expected_profit=profit,
+                            risk_score=risk_score,
+                            convergence_time=conv_time
+                        ))
+        
+        # Sort by risk-adjusted return
+        return sorted(
+            opportunities,
+            key=lambda x: x.expected_profit / x.risk_score,
+            reverse=True
+        )
+    
+    def _predict_spread(
+        self,
+        id1: str,
+        id2: str,
+        metric: str,
+        current_spread: float
+    ) -> float:
+        """Predict future spread evolution"""
+        # Prepare features
+        features = [
+            current_spread,
+            self.market.market_state.health_index,
+            self.market.market_state.systemic_risk,
+            self.market.market_state.collective_conviction,
+            getattr(self.market.listings[id1], metric),
+            getattr(self.market.listings[id2], metric),
+            self.market.market_state.reflex_state['innovation_gate'],
+            self.market.market_state.reflex_state['regulatory_shield'],
+            # Add more relevant features...
+        ]
+        
+        return float(self.spread_predictor.predict(
+            np.expand_dims(features, 0),
+            verbose=0
+        )[0])
+    
+    def _calculate_confidence(
+        self,
+        id1: str,
+        id2: str,
+        metric: str,
+        spread: float
+    ) -> float:
+        """Calculate confidence in spread convergence"""
+        # Historical performance factor
+        hist_perf = self.metric_performance.get(metric, 0.5)
+        
+        # Market state factor
+        market_health = self.market.market_state.health_index
+        
+        # Listing stability factor
+        stability1 = self.market.listings[id1].conviction_stability
+        stability2 = self.market.listings[id2].conviction_stability
+        
+        # Combine factors
+        base_confidence = (hist_perf + market_health + 
+                         (stability1 + stability2) / 2) / 3
+        
+        # Adjust for spread size
+        return float(base_confidence * (1 - min(abs(spread), 1)))
+    
+    def _evaluate_risk(
+        self,
+        id1: str,
+        id2: str,
+        metric: str,
+        spread: float
+    ) -> float:
+        """Evaluate risk of arbitrage position"""
+        features = [
+            abs(spread),
+            self.market.market_state.systemic_risk,
+            self.market.listings[id1].regulatory_risk,
+            self.market.listings[id2].regulatory_risk,
+            self.market.market_state.reflex_state['circuit_breaker'],
+            # Add more risk factors...
+        ]
+        
+        return float(self.risk_evaluator.predict(
+            np.expand_dims(features, 0),
+            verbose=0
+        )[0])
+    
+    def _predict_convergence_time(
+        self,
+        id1: str,
+        id2: str,
+        metric: str,
+        spread: float
+    ) -> int:
+        """Predict time until spread convergence"""
+        # Create sequence of recent market states
+        state_sequence = np.array([
+            [
+                s.health_index,
+                s.systemic_risk,
+                s.collective_conviction,
+                s.prediction_consensus
+            ]
+            for s in list(self.market.state_history)[-10:]
+        ])
+        
+        if len(state_sequence) < 10:
+            state_sequence = np.pad(
+                state_sequence,
+                ((10 - len(state_sequence), 0), (0, 0)),
+                mode='edge'
+            )
+        
+        prediction = self.convergence_predictor.predict(
+            np.expand_dims(state_sequence, 0),
+            verbose=0
+        )[0]
+        
+        return int(max(1, prediction[0]))
+    
+    def _calculate_expected_profit(
+        self,
+        current_spread: float,
+        future_spread: float,
+        confidence: float,
+        convergence_time: int
+    ) -> float:
+        """Calculate expected profit from arbitrage"""
+        # Base profit from spread convergence
+        spread_profit = abs(current_spread - future_spread)
+        
+        # Time decay factor
+        time_factor = np.exp(-convergence_time / 20)
+        
+        # Confidence adjustment
+        confidence_factor = confidence ** 0.5
+        
+        return float(spread_profit * time_factor * confidence_factor)
+    
+    def execute_arbitrage(
+        self,
+        opportunity: ArbitrageOpportunity
+    ) -> Optional[str]:
+        """Execute an arbitrage opportunity"""
+        if len(self.active_positions) >= self.max_positions:
+            return None
+            
+        # Calculate position size
+        size = self._calculate_position_size(opportunity)
+        
+        if size <= 0:
+            return None
+            
+        # Create position
+        position_id = f"pos_{len(self.active_positions)}"
+        position = SemanticPosition(
+            position_id=position_id,
+            long_id=opportunity.source_id,
+            short_id=opportunity.target_id,
+            metric=opportunity.metric,
+            size=size,
+            entry_spread=opportunity.spread,
+            current_spread=opportunity.spread,
+            profit_loss=0.0,
+            confidence=opportunity.confidence,
+            entry_time=len(self.market.state_history)
+        )
+        
+        self.active_positions[position_id] = position
+        return position_id
+    
+    def _calculate_position_size(
+        self,
+        opportunity: ArbitrageOpportunity
+    ) -> float:
+        """Calculate optimal position size"""
+        # Kelly criterion for position sizing
+        win_prob = opportunity.confidence
+        profit_ratio = opportunity.expected_profit / opportunity.risk_score
+        
+        kelly = win_prob - (1 - win_prob) / profit_ratio
+        
+        # Apply conservation factor and capital limits
+        max_size = self.capital * 0.2  # Max 20% of capital per position
+        conservative_size = kelly * max_size * 0.5  # Half Kelly
+        
+        return max(0.0, min(conservative_size, max_size))
+    
+    def update_positions(self):
+        """Update and manage active positions"""
+        closed_positions = []
+        
+        for pos_id, position in list(self.active_positions.items()):
+            # Update current spread
+            current_spread = (
+                getattr(self.market.listings[position.long_id], position.metric) -
+                getattr(self.market.listings[position.short_id], position.metric)
+            )
+            position.current_spread = current_spread
+            
+            # Calculate current P&L
+            position.profit_loss = (
+                position.size * (position.entry_spread - current_spread)
+            )
+            
+            # Check exit conditions
+            should_exit = self._check_exit_conditions(position)
+            if should_exit:
+                self.capital += position.profit_loss
+                closed_positions.append((position, position.profit_loss))
+                del self.active_positions[pos_id]
+        
+        # Update performance metrics
+        if closed_positions:
+            self._update_performance(closed_positions)
+    
+    def _check_exit_conditions(
+        self,
+        position: SemanticPosition
+    ) -> bool:
+        """Check if position should be closed"""
+        # Time-based exit
+        time_active = (
+            len(self.market.state_history) - position.entry_time
+        )
+        if time_active > 50:  # Arbitrary timeout
+            return True
+            
+        # Profit target
+        profit_threshold = position.size * 0.2  # 20% profit target
+        if position.profit_loss >= profit_threshold:
+            return True
+            
+        # Stop loss
+        stop_loss = -position.size * 0.1  # 10% stop loss
+        if position.profit_loss <= stop_loss:
+            return True
+            
+        # Spread convergence
+        if abs(position.current_spread) < self.min_spread:
+            return True
+            
+        return False
+    
+    def _update_performance(
+        self,
+        closed_positions: List[Tuple[SemanticPosition, float]]
+    ):
+        """Update performance metrics"""
+        for position, profit in closed_positions:
+            # Update metric performance
+            current_perf = self.metric_performance.get(position.metric, 0.5)
+            self.metric_performance[position.metric] = (
+                0.95 * current_perf +
+                0.05 * (1.0 if profit > 0 else 0.0)
+            )
+            
+            # Store in history
+            self.position_history.append((position, profit))
+    
+    def get_portfolio_stats(self) -> Dict:
+        """Get current portfolio statistics"""
+        return {
+            "capital": self.capital,
+            "active_positions": len(self.active_positions),
+            "total_pnl": sum(p.profit_loss for p in self.active_positions.values()),
+            "metric_performance": dict(self.metric_performance),
+            "position_metrics": {
+                pos_id: {
+                    "metric": pos.metric,
+                    "size": pos.size,
+                    "pnl": pos.profit_loss,
+                    "confidence": pos.confidence
+                }
+                for pos_id, pos in self.active_positions.items()
+            }
+        }
+
+def run_arbitrage_test():
+    """Test the semantic arbitrage system"""
+    market = NeuroMarket()
+    arbitrageur = SemanticArbitrageur(market)
+    
+    # Run simulation
+    for i in range(100):
+        # Update market
+        market.update_market_state()
+        
+        # Find and execute opportunities
+        opportunities = arbitrageur.find_opportunities()
+        for opp in opportunities[:2]:  # Try top 2 opportunities
+            arbitrageur.execute_arbitrage(opp)
+        
+        # Update positions
+        arbitrageur.update_positions()
+        
+        if i % 10 == 0:
+            print(f"\nStep {i}:")
+            stats = arbitrageur.get_portfolio_stats()
+            print(f"Capital: {stats['capital']:.2f}")
+            print(f"Active Positions: {stats['active_positions']}")
+            print(f"Total P&L: {stats['total_pnl']:.2f}")
+    
+    return market, arbitrageur
+
+if __name__ == "__main__":
+    market, arbitrageur = run_arbitrage_test()
