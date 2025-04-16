@@ -1,0 +1,348 @@
+import tensorflow as tf
+import numpy as np
+from dataclasses import dataclass
+from typing import Dict, List, Tuple, Optional
+from collections import deque
+import heapq
+
+@dataclass
+class GovernanceState:
+    upgrade_frozen: bool
+    fork_merge_threshold: float
+    issuance_margin: float
+    arbitrage_limit: float
+    vote_weight_multiplier: float
+
+@dataclass
+class MarketSignal:
+    etf_nav_divergence: float
+    arbitrage_volatility: float
+    fork_tension: float
+    coherence_score: float
+    conviction_stability: float
+
+class AdaptiveGovernanceController:
+    def __init__(
+        self,
+        intelligence_index: CollectiveIntelligenceIndex,
+        derivative_factory: IntentDerivativeFactory,
+        base_margin: float = 0.2,
+        base_threshold: float = 0.67
+    ):
+        self.intelligence_index = intelligence_index
+        self.derivative_factory = derivative_factory
+        self.base_margin = base_margin
+        self.base_threshold = base_threshold
+        
+        # Governance state
+        self.current_state = GovernanceState(
+            upgrade_frozen=False,
+            fork_merge_threshold=base_threshold,
+            issuance_margin=base_margin,
+            arbitrage_limit=1.0,
+            vote_weight_multiplier=1.0
+        )
+        
+        # Control parameters
+        self.control_bounds = {
+            'margin': (0.1, 0.5),
+            'threshold': (0.51, 0.95),
+            'arbitrage_limit': (0.5, 2.0)
+        }
+        
+        # Market stability tracking
+        self.stability_history = deque(maxlen=100)
+        self.governance_actions = deque(maxlen=1000)
+        
+        # Policy model for governance decisions
+        self.policy_model = self._build_policy_model()
+    
+    def _build_policy_model(self) -> tf.keras.Model:
+        """Build model for governance policy decisions"""
+        model = tf.keras.Sequential([
+            tf.keras.layers.Dense(64, input_dim=10),
+            tf.keras.layers.LeakyReLU(),
+            tf.keras.layers.Dense(32),
+            tf.keras.layers.LeakyReLU(),
+            tf.keras.layers.Dense(5)  # Governance parameters
+        ])
+        
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(0.001),
+            loss='mse'
+        )
+        return model
+    
+    def get_market_signals(self) -> MarketSignal:
+        """Gather current market signals"""
+        # Calculate ETF NAV divergence
+        nav_divergences = []
+        for etf in self.derivative_factory.etfs.values():
+            current_nav = etf.nav_per_token * etf.total_supply
+            historical_nav = np.mean(
+                list(self.derivative_factory.etf_performance[etf.token_id])
+            )
+            nav_divergences.append(abs(current_nav - historical_nav) / historical_nav)
+        
+        etf_nav_divergence = np.mean(nav_divergences) if nav_divergences else 0.0
+        
+        # Calculate arbitrage volatility
+        arb_vols = [
+            np.std(list(perf)[-10:]) / np.mean(list(perf)[-10:])
+            for perf in self.derivative_factory.etf_performance.values()
+        ]
+        arbitrage_volatility = np.mean(arb_vols) if arb_vols else 0.0
+        
+        # Get system health metrics
+        health = self.intelligence_index.get_health_report()
+        
+        return MarketSignal(
+            etf_nav_divergence=float(etf_nav_divergence),
+            arbitrage_volatility=float(arbitrage_volatility),
+            fork_tension=float(health["fork_tension_trend"][-1]),
+            coherence_score=float(health["coherence_trend"][-1]),
+            conviction_stability=float(health["conviction_stability"])
+        )
+    
+    def update_governance(self) -> GovernanceState:
+        """Update governance parameters based on market signals"""
+        signals = self.get_market_signals()
+        
+        # Prepare input features
+        features = [
+            signals.etf_nav_divergence,
+            signals.arbitrage_volatility,
+            signals.fork_tension,
+            signals.coherence_score,
+            signals.conviction_stability,
+            self.current_state.issuance_margin,
+            self.current_state.fork_merge_threshold,
+            self.current_state.arbitrage_limit,
+            float(self.current_state.upgrade_frozen),
+            self.current_state.vote_weight_multiplier
+        ]
+        
+        # Get policy decisions
+        decisions = self.policy_model.predict(
+            tf.expand_dims(features, 0),
+            verbose=0
+        )[0]
+        
+        # Update governance state
+        new_state = self._apply_governance_decisions(decisions, signals)
+        
+        # Record action
+        self.governance_actions.append((signals, new_state))
+        
+        # Update stability history
+        stability_score = self._calculate_stability_score(signals)
+        self.stability_history.append(stability_score)
+        
+        self.current_state = new_state
+        return new_state
+    
+    def _apply_governance_decisions(
+        self,
+        decisions: np.ndarray,
+        signals: MarketSignal
+    ) -> GovernanceState:
+        """Apply governance decisions with safety checks"""
+        # Decode decisions
+        margin_adj, threshold_adj, arb_limit_adj, freeze_prob, weight_adj = decisions
+        
+        # Apply upgrade freeze based on market conditions
+        upgrade_frozen = (
+            signals.etf_nav_divergence > 0.2 or
+            signals.fork_tension > 0.7 or
+            signals.arbitrage_volatility > 0.3
+        )
+        
+        # Adjust fork merge threshold
+        new_threshold = self.base_threshold
+        if signals.coherence_score < 0.5 and signals.conviction_stability > 0.7:
+            # Require supermajority
+            new_threshold = min(0.95, self.base_threshold * 1.2)
+        
+        # Adjust issuance margin based on arbitrage volatility
+        new_margin = np.clip(
+            self.base_margin * (1 + signals.arbitrage_volatility),
+            *self.control_bounds['margin']
+        )
+        
+        # Adjust arbitrage limit based on NAV divergence
+        new_arb_limit = np.clip(
+            1.0 / (1 + signals.etf_nav_divergence),
+            *self.control_bounds['arbitrage_limit']
+        )
+        
+        # Adjust vote weight multiplier based on coherence
+        new_weight_mult = 1.0 + (signals.coherence_score - 0.5)
+        
+        return GovernanceState(
+            upgrade_frozen=upgrade_frozen,
+            fork_merge_threshold=float(new_threshold),
+            issuance_margin=float(new_margin),
+            arbitrage_limit=float(new_arb_limit),
+            vote_weight_multiplier=float(new_weight_mult)
+        )
+    
+    def _calculate_stability_score(self, signals: MarketSignal) -> float:
+        """Calculate overall market stability score"""
+        weights = {
+            'nav_divergence': 0.3,
+            'arbitrage_volatility': 0.2,
+            'fork_tension': 0.2,
+            'coherence': 0.2,
+            'conviction': 0.1
+        }
+        
+        score = sum([
+            weights['nav_divergence'] * (1 - signals.etf_nav_divergence),
+            weights['arbitrage_volatility'] * (1 - signals.arbitrage_volatility),
+            weights['fork_tension'] * (1 - signals.fork_tension),
+            weights['coherence'] * signals.coherence_score,
+            weights['conviction'] * signals.conviction_stability
+        ])
+        
+        return float(score)
+    
+    def can_upgrade(self) -> Tuple[bool, str]:
+        """Check if protocol upgrades are allowed"""
+        if self.current_state.upgrade_frozen:
+            return False, "Upgrades frozen due to market instability"
+        
+        recent_stability = list(self.stability_history)[-10:]
+        if np.mean(recent_stability) < 0.6:
+            return False, "Recent market stability too low"
+            
+        return True, "Upgrades allowed"
+    
+    def get_merge_requirements(
+        self,
+        branch_id: str
+    ) -> Dict[str, float]:
+        """Get requirements for merging a fork"""
+        signals = self.get_market_signals()
+        base_threshold = self.current_state.fork_merge_threshold
+        
+        # Adjust threshold based on branch-specific metrics
+        if branch_id in self.intelligence_index.futures_market.branch_states:
+            branch_state = self.intelligence_index.futures_market.branch_states[branch_id]
+            
+            # Increase threshold for high-value branches
+            value_multiplier = min(1.2, 1 + branch_state.value / 1000)
+            
+            # Decrease threshold for highly consensual branches
+            consensus_multiplier = max(0.8, 1 - branch_state.consensus_strength)
+            
+            adjusted_threshold = base_threshold * value_multiplier * consensus_multiplier
+        else:
+            adjusted_threshold = base_threshold
+        
+        return {
+            "approval_threshold": float(adjusted_threshold),
+            "min_voter_participation": 0.4,
+            "conviction_requirement": 0.6
+        }
+    
+    def get_arbitrage_limits(self) -> Dict[str, float]:
+        """Get current arbitrage limits for market makers"""
+        return {
+            "max_position_size": self.current_state.arbitrage_limit,
+            "min_margin": self.current_state.issuance_margin,
+            "max_leverage": 1.0 / self.current_state.issuance_margin
+        }
+
+class ArbitrageController:
+    def __init__(
+        self,
+        governance: AdaptiveGovernanceController,
+        max_positions: int = 10
+    ):
+        self.governance = governance
+        self.max_positions = max_positions
+        self.active_positions = {}
+        self.profit_history = deque(maxlen=1000)
+        
+    def execute_arbitrage(
+        self,
+        signals: MarketSignal
+    ) -> Optional[Dict]:
+        """Execute arbitrage within governance limits"""
+        limits = self.governance.get_arbitrage_limits()
+        
+        # Check if arbitrage is viable
+        if signals.etf_nav_divergence < 0.05:
+            return None
+            
+        # Calculate optimal position size
+        max_size = limits["max_position_size"]
+        margin_req = limits["min_margin"]
+        
+        size = min(
+            max_size,
+            signals.etf_nav_divergence * max_size
+        )
+        
+        # Apply position limits
+        if len(self.active_positions) >= self.max_positions:
+            return None
+            
+        # Create arbitrage position
+        position = {
+            "size": size,
+            "margin": size * margin_req,
+            "expected_profit": size * signals.etf_nav_divergence * 0.5
+        }
+        
+        return position
+
+def run_governance_test():
+    """Test the adaptive governance system"""
+    # Initialize base components
+    futures_market = ForkFuturesMarket()
+    derivative_factory = IntentDerivativeFactory(futures_market)
+    intelligence_index = CollectiveIntelligenceIndex(
+        futures_market,
+        derivative_factory
+    )
+    
+    # Initialize governance
+    governance = AdaptiveGovernanceController(
+        intelligence_index,
+        derivative_factory
+    )
+    
+    # Initialize arbitrage controller
+    arbitrage = ArbitrageController(governance)
+    
+    # Run simulation
+    for i in range(100):
+        # Update market state
+        signals = governance.get_market_signals()
+        
+        # Update governance
+        state = governance.update_governance()
+        
+        # Try arbitrage
+        position = arbitrage.execute_arbitrage(signals)
+        
+        if i % 10 == 0:
+            print(f"\nStep {i}:")
+            print("Governance State:")
+            print(f"Upgrade Frozen: {state.upgrade_frozen}")
+            print(f"Merge Threshold: {state.fork_merge_threshold:.2f}")
+            print(f"Issuance Margin: {state.issuance_margin:.2f}")
+            
+            can_upgrade, reason = governance.can_upgrade()
+            print(f"\nUpgrade Status: {reason}")
+            
+            if position:
+                print(f"\nArbitrage Position:")
+                print(f"Size: {position['size']:.2f}")
+                print(f"Expected Profit: {position['expected_profit']:.2f}")
+    
+    return governance, arbitrage
+
+if __name__ == "__main__":
+    governance, arbitrage = run_governance_test()
