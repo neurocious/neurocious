@@ -1,0 +1,440 @@
+import tensorflow as tf
+import numpy as np
+from dataclasses import dataclass
+from typing import Dict, List, Tuple, Optional
+from collections import deque
+import heapq
+
+@dataclass
+class ForkFuture:
+    branch_id: str
+    issuer_id: str
+    maturity: int  # Time steps until maturity
+    conviction: float  # Issuer's confidence (0-1)
+    stake: float  # Amount staked on this future
+    intent_vector: tf.Tensor  # Predicted field direction
+    margin_requirement: float  # Required collateral
+    
+@dataclass
+class BranchState:
+    probability: float
+    value: float
+    consensus_strength: float
+    active_futures: int
+    
+@dataclass
+class YieldCurve:
+    horizons: List[int]
+    yields: List[float]
+    volatility: List[float]
+    consensus_strength: List[float]
+
+class ForkFuturesMarket:
+    def __init__(self, min_margin: float = 0.2):
+        self.min_margin = min_margin
+        self.futures: Dict[str, ForkFuture] = {}
+        self.branch_states: Dict[str, BranchState] = {}
+        self.positions: Dict[str, Dict[str, float]] = {}  # trader -> future -> amount
+        self.yield_curves: Dict[str, YieldCurve] = {}
+        
+        # Risk metrics
+        self.volatility_surface = {}
+        self.consensus_heatmap = {}
+        
+    def issue_future(self, future: ForkFuture) -> str:
+        """Issue a new fork future contract"""
+        # Generate unique ID
+        future_id = f"future_{len(self.futures)}_{future.branch_id}"
+        
+        # Verify margin requirement
+        if future.margin_requirement < self.min_margin * future.stake:
+            return None
+            
+        self.futures[future_id] = future
+        
+        # Initialize position tracking
+        if future.issuer_id not in self.positions:
+            self.positions[future.issuer_id] = {}
+        self.positions[future.issuer_id][future_id] = future.stake
+        
+        # Update branch state
+        self._update_branch_state(future.branch_id)
+        
+        return future_id
+    
+    def take_position(
+        self,
+        trader_id: str,
+        future_id: str,
+        amount: float,
+        margin: float
+    ) -> bool:
+        """Take a position in a fork future"""
+        if future_id not in self.futures:
+            return False
+            
+        future = self.futures[future_id]
+        
+        # Verify margin
+        if margin < self.min_margin * amount:
+            return False
+            
+        # Initialize trader positions
+        if trader_id not in self.positions:
+            self.positions[trader_id] = {}
+            
+        # Record position
+        self.positions[trader_id][future_id] = amount
+        
+        # Update branch state
+        self._update_branch_state(future.branch_id)
+        
+        return True
+    
+    def _update_branch_state(self, branch_id: str):
+        """Update state metrics for a branch"""
+        branch_futures = [
+            f for f in self.futures.values()
+            if f.branch_id == branch_id
+        ]
+        
+        if not branch_futures:
+            return
+            
+        # Calculate weighted probability
+        total_stake = sum(f.stake for f in branch_futures)
+        probability = sum(
+            f.stake * f.conviction / total_stake
+            for f in branch_futures
+        )
+        
+        # Calculate consensus strength
+        mean_intent = tf.reduce_mean([
+            f.intent_vector for f in branch_futures
+        ], axis=0)
+        consensus_strength = float(tf.reduce_mean([
+            tf.keras.losses.cosine_similarity(f.intent_vector, mean_intent)
+            for f in branch_futures
+        ]))
+        
+        # Calculate branch value
+        value = total_stake * probability * consensus_strength
+        
+        self.branch_states[branch_id] = BranchState(
+            probability=probability,
+            value=value,
+            consensus_strength=consensus_strength,
+            active_futures=len(branch_futures)
+        )
+        
+        # Update yield curve
+        self._update_yield_curve(branch_id)
+    
+    def _update_yield_curve(self, branch_id: str):
+        """Update yield curve for a branch"""
+        # Group futures by maturity
+        maturity_groups = {}
+        for future in self.futures.values():
+            if future.branch_id != branch_id:
+                continue
+            if future.maturity not in maturity_groups:
+                maturity_groups[future.maturity] = []
+            maturity_groups[future.maturity].append(future)
+        
+        if not maturity_groups:
+            return
+            
+        # Calculate yields across horizons
+        horizons = sorted(maturity_groups.keys())
+        yields = []
+        vols = []
+        consensus = []
+        
+        for horizon in horizons:
+            futures = maturity_groups[horizon]
+            
+            # Calculate yield as expected value growth
+            total_stake = sum(f.stake for f in futures)
+            horizon_yield = sum(
+                f.stake * f.conviction / total_stake
+                for f in futures
+            )
+            yields.append(horizon_yield)
+            
+            # Calculate volatility
+            conviction_std = np.std([f.conviction for f in futures])
+            vols.append(conviction_std)
+            
+            # Calculate consensus strength
+            mean_intent = tf.reduce_mean([
+                f.intent_vector for f in futures
+            ], axis=0)
+            consensus_str = float(tf.reduce_mean([
+                tf.keras.losses.cosine_similarity(f.intent_vector, mean_intent)
+                for f in futures
+            ]))
+            consensus.append(consensus_str)
+        
+        self.yield_curves[branch_id] = YieldCurve(
+            horizons=horizons,
+            yields=yields,
+            volatility=vols,
+            consensus_strength=consensus
+        )
+
+class BranchAuctionHouse:
+    def __init__(self, min_bid: float = 1.0):
+        self.min_bid = min_bid
+        self.active_auctions: Dict[str, Dict] = {}
+        self.bid_history: Dict[str, List] = {}
+        
+    def create_auction(
+        self,
+        branch_id: str,
+        creator_id: str,
+        initial_price: float,
+        duration: int
+    ) -> str:
+        """Create a new branch auction"""
+        auction_id = f"auction_{len(self.active_auctions)}_{branch_id}"
+        
+        self.active_auctions[auction_id] = {
+            'branch_id': branch_id,
+            'creator_id': creator_id,
+            'current_price': initial_price,
+            'highest_bidder': None,
+            'end_time': duration,
+            'status': 'active'
+        }
+        
+        self.bid_history[auction_id] = []
+        
+        return auction_id
+    
+    def place_bid(
+        self,
+        auction_id: str,
+        bidder_id: str,
+        amount: float
+    ) -> bool:
+        """Place a bid on a branch auction"""
+        if auction_id not in self.active_auctions:
+            return False
+            
+        auction = self.active_auctions[auction_id]
+        
+        if amount <= auction['current_price'] or amount < self.min_bid:
+            return False
+            
+        # Record bid
+        auction['current_price'] = amount
+        auction['highest_bidder'] = bidder_id
+        
+        self.bid_history[auction_id].append({
+            'bidder': bidder_id,
+            'amount': amount,
+            'time': len(self.bid_history[auction_id])
+        })
+        
+        return True
+    
+    def finalize_auction(
+        self,
+        auction_id: str
+    ) -> Optional[Tuple[str, float]]:
+        """Finalize an auction and return winner"""
+        if auction_id not in self.active_auctions:
+            return None
+            
+        auction = self.active_auctions[auction_id]
+        
+        if auction['highest_bidder'] is None:
+            auction['status'] = 'cancelled'
+            return None
+            
+        auction['status'] = 'completed'
+        return (auction['highest_bidder'], auction['current_price'])
+
+class IntentFuturesValidator:
+    def __init__(
+        self,
+        validator_id: str,
+        initial_stake: float,
+        futures_market: ForkFuturesMarket,
+        auction_house: BranchAuctionHouse
+    ):
+        self.validator_id = validator_id
+        self.stake = initial_stake
+        self.futures_market = futures_market
+        self.auction_house = auction_house
+        
+        # Portfolio tracking
+        self.issued_futures: List[str] = []
+        self.active_positions: Dict[str, float] = {}
+        self.auction_participation: Dict[str, float] = {}
+        
+        # Strategy components
+        self.portfolio_model = self._build_portfolio_model()
+        
+    def _build_portfolio_model(self) -> tf.keras.Model:
+        """Build model for portfolio optimization"""
+        model = tf.keras.Sequential([
+            tf.keras.layers.Dense(64, input_dim=10),
+            tf.keras.layers.LeakyReLU(),
+            tf.keras.layers.Dense(32),
+            tf.keras.layers.LeakyReLU(),
+            tf.keras.layers.Dense(3)  # [future_weight, auction_weight, hedge_weight]
+        ])
+        
+        model.compile(optimizer='adam', loss='mse')
+        return model
+    
+    def issue_intent_future(
+        self,
+        branch_id: str,
+        intent_vector: tf.Tensor,
+        maturity: int,
+        conviction: float
+    ) -> Optional[str]:
+        """Issue a new intent future"""
+        # Calculate stake based on conviction
+        stake = self.stake * conviction * 0.2  # Max 20% of stake
+        
+        future = ForkFuture(
+            branch_id=branch_id,
+            issuer_id=self.validator_id,
+            maturity=maturity,
+            conviction=conviction,
+            stake=stake,
+            intent_vector=intent_vector,
+            margin_requirement=stake * 0.3  # 30% margin
+        )
+        
+        future_id = self.futures_market.issue_future(future)
+        if future_id:
+            self.issued_futures.append(future_id)
+            return future_id
+        return None
+    
+    def optimize_portfolio(
+        self,
+        market_condition: MarketCondition
+    ):
+        """Optimize portfolio allocation"""
+        # Prepare input features
+        features = [
+            market_condition.field_entropy,
+            market_condition.volatility,
+            market_condition.global_consensus,
+            len(self.issued_futures),
+            len(self.active_positions),
+            self.stake,
+            # Add more market metrics...
+        ]
+        
+        # Get allocation weights
+        weights = self.portfolio_model.predict(
+            tf.expand_dims(features, 0),
+            verbose=0
+        )[0]
+        
+        # Normalize weights
+        weights = tf.nn.softmax(weights)
+        
+        return {
+            'future_allocation': float(weights[0]),
+            'auction_allocation': float(weights[1]),
+            'hedge_allocation': float(weights[2])
+        }
+    
+    def hedge_positions(self):
+        """Create hedge positions for risk management"""
+        for future_id in self.issued_futures:
+            future = self.futures_market.futures.get(future_id)
+            if not future:
+                continue
+                
+            # Find opposing futures to hedge with
+            opposing_futures = [
+                f for f_id, f in self.futures_market.futures.items()
+                if (f.branch_id == future.branch_id and
+                    f.maturity == future.maturity and
+                    f_id != future_id)
+            ]
+            
+            if not opposing_futures:
+                continue
+                
+            # Select best hedge based on conviction and cost
+            best_hedge = max(
+                opposing_futures,
+                key=lambda f: f.conviction / f.stake
+            )
+            
+            # Take opposing position
+            hedge_amount = future.stake * 0.5  # 50% hedge
+            self.futures_market.take_position(
+                self.validator_id,
+                future_id,
+                hedge_amount,
+                hedge_amount * 0.3  # 30% margin
+            )
+
+def run_futures_test():
+    """Test the fork futures system"""
+    # Initialize markets
+    futures_market = ForkFuturesMarket()
+    auction_house = BranchAuctionHouse()
+    
+    # Create validators
+    validators = [
+        IntentFuturesValidator(
+            f"validator_{i}",
+            initial_stake=1000.0,
+            futures_market=futures_market,
+            auction_house=auction_house
+        )
+        for i in range(3)
+    ]
+    
+    # Simulation loop
+    for i in range(100):
+        # Create market condition
+        condition = MarketCondition(
+            field_entropy=random.random(),
+            volatility=0.1 + 0.2 * np.sin(i/10),
+            recent_accuracy={h: random.random() for h in [1, 5, 10, 20]},
+            global_consensus=0.8
+        )
+        
+        # Validators issue futures and optimize portfolios
+        for validator in validators:
+            # Issue new future
+            intent = tf.random.normal([3])
+            future_id = validator.issue_intent_future(
+                branch_id=f"branch_{i%5}",
+                intent_vector=intent,
+                maturity=10,
+                conviction=random.random()
+            )
+            
+            # Optimize portfolio
+            allocation = validator.optimize_portfolio(condition)
+            
+            # Create hedges
+            validator.hedge_positions()
+        
+        # Print market state periodically
+        if i % 10 == 0:
+            print(f"\nStep {i}:")
+            print("Active Futures:", len(futures_market.futures))
+            print("Branch States:", len(futures_market.branch_states))
+            for branch_id, state in futures_market.branch_states.items():
+                print(f"\nBranch {branch_id}:")
+                print(f"Probability: {state.probability:.3f}")
+                print(f"Consensus: {state.consensus_strength:.3f}")
+    
+    return futures_market, validators
+
+if __name__ == "__main__":
+    market, validators = run_futures_test()
