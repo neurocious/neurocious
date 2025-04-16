@@ -1,0 +1,414 @@
+import tensorflow as tf
+import numpy as np
+from dataclasses import dataclass
+from typing import Dict, List, Tuple, Optional
+from collections import deque
+import heapq
+
+@dataclass
+class IntentTranche:
+    name: str
+    min_conviction: float
+    max_conviction: float
+    min_maturity: int
+    max_maturity: int
+    risk_score: float
+    futures: List[str]  # Future IDs
+
+@dataclass
+class IntentETF:
+    token_id: str
+    tranches: List[IntentTranche]
+    total_supply: float
+    nav_per_token: float
+    decay_rate: float
+    rebalance_threshold: float
+
+@dataclass
+class SystemHealth:
+    coherence_score: float
+    fork_tension: float
+    conviction_stability: float
+    temporal_alignment: float
+
+class IntentDerivativeFactory:
+    def __init__(self, futures_market: ForkFuturesMarket):
+        self.futures_market = futures_market
+        self.tranches: Dict[str, IntentTranche] = {}
+        self.etfs: Dict[str, IntentETF] = {}
+        
+        # Yield tracking
+        self.tranche_yields: Dict[str, float] = {}
+        self.etf_performance: Dict[str, deque] = {}
+        
+        # Risk metrics
+        self.conviction_volatility = {}
+        self.decay_curves = {}
+    
+    def create_tranche(
+        self,
+        name: str,
+        min_conviction: float,
+        max_conviction: float,
+        min_maturity: int,
+        max_maturity: int
+    ) -> str:
+        """Create a new intent tranche"""
+        # Filter qualifying futures
+        qualifying_futures = [
+            fid for fid, future in self.futures_market.futures.items()
+            if (min_conviction <= future.conviction <= max_conviction and
+                min_maturity <= future.maturity <= max_maturity)
+        ]
+        
+        # Calculate risk score based on composition
+        risk_score = self._calculate_tranche_risk(qualifying_futures)
+        
+        tranche = IntentTranche(
+            name=name,
+            min_conviction=min_conviction,
+            max_conviction=max_conviction,
+            min_maturity=min_maturity,
+            max_maturity=max_maturity,
+            risk_score=risk_score,
+            futures=qualifying_futures
+        )
+        
+        tranche_id = f"tranche_{len(self.tranches)}"
+        self.tranches[tranche_id] = tranche
+        
+        return tranche_id
+    
+    def _calculate_tranche_risk(self, future_ids: List[str]) -> float:
+        """Calculate risk score for a collection of futures"""
+        if not future_ids:
+            return 1.0
+            
+        futures = [
+            self.futures_market.futures[fid]
+            for fid in future_ids
+        ]
+        
+        # Conviction volatility
+        conv_std = np.std([f.conviction for f in futures])
+        
+        # Maturity spread
+        mat_range = max(f.maturity for f in futures) - min(f.maturity for f in futures)
+        
+        # Intent alignment
+        mean_intent = tf.reduce_mean([f.intent_vector for f in futures], axis=0)
+        intent_div = tf.reduce_mean([
+            tf.keras.losses.cosine_similarity(f.intent_vector, mean_intent)
+            for f in futures
+        ])
+        
+        return float(conv_std + 0.3 * mat_range + 0.5 * intent_div)
+    
+    def create_etf(
+        self,
+        tranche_weights: Dict[str, float],
+        initial_supply: float,
+        decay_rate: float = 0.01
+    ) -> str:
+        """Create a new intent ETF from tranches"""
+        # Verify tranches exist
+        if not all(tid in self.tranches for tid in tranche_weights):
+            return None
+            
+        selected_tranches = [
+            self.tranches[tid] for tid in tranche_weights
+        ]
+        
+        # Calculate initial NAV
+        nav = self._calculate_portfolio_nav(
+            selected_tranches,
+            list(tranche_weights.values())
+        )
+        
+        etf = IntentETF(
+            token_id=f"etf_{len(self.etfs)}",
+            tranches=selected_tranches,
+            total_supply=initial_supply,
+            nav_per_token=nav / initial_supply,
+            decay_rate=decay_rate,
+            rebalance_threshold=0.1
+        )
+        
+        self.etfs[etf.token_id] = etf
+        self.etf_performance[etf.token_id] = deque(maxlen=100)
+        
+        return etf.token_id
+    
+    def _calculate_portfolio_nav(
+        self,
+        tranches: List[IntentTranche],
+        weights: List[float]
+    ) -> float:
+        """Calculate NAV for a portfolio of tranches"""
+        nav = 0.0
+        for tranche, weight in zip(tranches, weights):
+            tranche_value = sum(
+                self.futures_market.futures[fid].stake
+                for fid in tranche.futures
+            )
+            nav += tranche_value * weight
+        return nav
+    
+    def update_derivatives(self, current_time: int):
+        """Update all derivative products"""
+        # Update tranche composition
+        for tranche_id, tranche in self.tranches.items():
+            # Refilter futures based on criteria
+            tranche.futures = [
+                fid for fid, future in self.futures_market.futures.items()
+                if (tranche.min_conviction <= future.conviction <= tranche.max_conviction and
+                    tranche.min_maturity <= future.maturity <= tranche.max_maturity)
+            ]
+            
+            # Update risk score
+            tranche.risk_score = self._calculate_tranche_risk(tranche.futures)
+            
+            # Calculate yield
+            current_value = sum(
+                self.futures_market.futures[fid].stake
+                for fid in tranche.futures
+            )
+            self.tranche_yields[tranche_id] = current_value
+        
+        # Update ETFs
+        for etf_id, etf in self.etfs.items():
+            # Apply time decay
+            etf.nav_per_token *= (1 - etf.decay_rate)
+            
+            # Calculate new NAV
+            new_nav = self._calculate_portfolio_nav(
+                etf.tranches,
+                [1.0/len(etf.tranches)] * len(etf.tranches)  # Equal weight for example
+            )
+            
+            # Track performance
+            self.etf_performance[etf_id].append(new_nav)
+            
+            # Check if rebalance needed
+            nav_change = abs(new_nav/etf.total_supply - etf.nav_per_token)
+            if nav_change > etf.rebalance_threshold:
+                self._rebalance_etf(etf)
+
+    def _rebalance_etf(self, etf: IntentETF):
+        """Rebalance ETF composition"""
+        # Calculate new optimal weights (simplified)
+        tranche_returns = [
+            self.tranche_yields.get(t.name, 0)
+            for t in etf.tranches
+        ]
+        
+        total_return = sum(tranche_returns)
+        if total_return > 0:
+            new_weights = [r/total_return for r in tranche_returns]
+        else:
+            new_weights = [1.0/len(etf.tranches)] * len(etf.tranches)
+        
+        # Update NAV based on new weights
+        new_nav = self._calculate_portfolio_nav(
+            etf.tranches,
+            new_weights
+        )
+        etf.nav_per_token = new_nav / etf.total_supply
+
+class CollectiveIntelligenceIndex:
+    def __init__(
+        self,
+        futures_market: ForkFuturesMarket,
+        derivative_factory: IntentDerivativeFactory,
+        smoothing_factor: float = 0.95
+    ):
+        self.futures_market = futures_market
+        self.derivative_factory = derivative_factory
+        self.smoothing_factor = smoothing_factor
+        
+        # Index components
+        self.coherence_history = deque(maxlen=1000)
+        self.fork_tension_history = deque(maxlen=1000)
+        self.conviction_stability = 1.0
+        self.temporal_alignment = 1.0
+        
+        # Aggregate index
+        self.current_index = 1.0
+        self.index_history = deque(maxlen=1000)
+    
+    def update_index(self) -> SystemHealth:
+        """Update collective intelligence index"""
+        # Calculate coherence score
+        coherence = self._calculate_coherence()
+        self.coherence_history.append(coherence)
+        
+        # Calculate fork tension
+        fork_tension = self._calculate_fork_tension()
+        self.fork_tension_history.append(fork_tension)
+        
+        # Update stability metrics
+        self._update_stability_metrics()
+        
+        # Calculate aggregate index
+        new_index = self._aggregate_metrics(
+            coherence,
+            fork_tension,
+            self.conviction_stability,
+            self.temporal_alignment
+        )
+        
+        # Smooth index
+        self.current_index = (
+            self.smoothing_factor * self.current_index +
+            (1 - self.smoothing_factor) * new_index
+        )
+        self.index_history.append(self.current_index)
+        
+        return SystemHealth(
+            coherence_score=coherence,
+            fork_tension=fork_tension,
+            conviction_stability=self.conviction_stability,
+            temporal_alignment=self.temporal_alignment
+        )
+    
+    def _calculate_coherence(self) -> float:
+        """Calculate system coherence score"""
+        if not self.futures_market.futures:
+            return 1.0
+            
+        # Calculate mean intent vector
+        all_intents = tf.stack([
+            f.intent_vector for f in self.futures_market.futures.values()
+        ])
+        mean_intent = tf.reduce_mean(all_intents, axis=0)
+        
+        # Calculate alignment to mean
+        alignments = tf.reduce_mean([
+            tf.keras.losses.cosine_similarity(v, mean_intent)
+            for v in all_intents
+        ])
+        
+        return float(alignments)
+    
+    def _calculate_fork_tension(self) -> float:
+        """Calculate tension between competing forks"""
+        branch_states = self.futures_market.branch_states
+        if not branch_states:
+            return 0.0
+            
+        # Calculate probability dispersion
+        probs = [s.probability for s in branch_states.values()]
+        entropy = -sum(p * np.log(p + 1e-10) for p in probs)
+        
+        # Normalize by maximum possible entropy
+        max_entropy = np.log(len(probs))
+        return float(entropy / max_entropy if max_entropy > 0 else 0.0)
+    
+    def _update_stability_metrics(self):
+        """Update conviction and temporal stability metrics"""
+        if len(self.coherence_history) < 2:
+            return
+            
+        # Conviction stability from coherence variance
+        conv_std = np.std(list(self.coherence_history))
+        self.conviction_stability = float(np.exp(-conv_std))
+        
+        # Temporal alignment from fork tension trend
+        tension_trend = np.mean([
+            b - a for a, b in zip(
+                self.fork_tension_history,
+                list(self.fork_tension_history)[1:]
+            )
+        ])
+        self.temporal_alignment = float(1.0 / (1.0 + abs(tension_trend)))
+    
+    def _aggregate_metrics(
+        self,
+        coherence: float,
+        fork_tension: float,
+        conviction_stability: float,
+        temporal_alignment: float
+    ) -> float:
+        """Aggregate metrics into single index"""
+        weights = [0.4, 0.3, 0.2, 0.1]  # Example weights
+        
+        components = [
+            coherence,
+            1.0 - fork_tension,  # Invert tension
+            conviction_stability,
+            temporal_alignment
+        ]
+        
+        return float(sum(w * v for w, v in zip(weights, components)))
+    
+    def get_health_report(self) -> Dict:
+        """Get detailed system health report"""
+        return {
+            "current_index": self.current_index,
+            "coherence_trend": list(self.coherence_history)[-10:],
+            "fork_tension_trend": list(self.fork_tension_history)[-10:],
+            "conviction_stability": self.conviction_stability,
+            "temporal_alignment": self.temporal_alignment,
+            "recommendation": self._generate_recommendation()
+        }
+    
+    def _generate_recommendation(self) -> str:
+        """Generate system recommendation based on health metrics"""
+        if self.current_index > 0.8:
+            return "HEALTHY - Good time for major protocol updates"
+        elif self.current_index > 0.6:
+            return "STABLE - Normal operations advised"
+        elif self.current_index > 0.4:
+            return "CAUTIOUS - Monitor fork tension"
+        else:
+            return "UNSTABLE - Delay major changes"
+
+def run_test():
+    """Test the derivative system and intelligence index"""
+    futures_market = ForkFuturesMarket()
+    derivative_factory = IntentDerivativeFactory(futures_market)
+    intelligence_index = CollectiveIntelligenceIndex(
+        futures_market,
+        derivative_factory
+    )
+    
+    # Create some test tranches
+    tranches = [
+        derivative_factory.create_tranche(
+            f"tranche_{i}",
+            min_conviction=0.2 * i,
+            max_conviction=0.2 * (i + 1),
+            min_maturity=5 * i,
+            max_maturity=5 * (i + 1)
+        )
+        for i in range(5)
+    ]
+    
+    # Create ETFs
+    etfs = [
+        derivative_factory.create_etf(
+            {t: 1.0/len(tranches) for t in tranches},
+            initial_supply=1000.0
+        )
+        for _ in range(3)
+    ]
+    
+    # Run simulation
+    for i in range(100):
+        # Update derivatives
+        derivative_factory.update_derivatives(i)
+        
+        # Update intelligence index
+        health = intelligence_index.update_index()
+        
+        if i % 10 == 0:
+            print(f"\nStep {i}:")
+            print(f"Collective Intelligence: {intelligence_index.current_index:.3f}")
+            print(f"System Health: {health}")
+            report = intelligence_index.get_health_report()
+            print(f"Recommendation: {report['recommendation']}")
+    
+    return futures_market, derivative_factory, intelligence_index
+
+if __name__ == "__main__":
+    market, factory, index = run_test()
