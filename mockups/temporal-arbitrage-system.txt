@@ -1,0 +1,433 @@
+import tensorflow as tf
+import numpy as np
+from dataclasses import dataclass
+from typing import Dict, List, Tuple, Optional
+from collections import deque
+import heapq
+
+@dataclass
+class TemporalPosition:
+    validator_id: str
+    entry_time: int
+    horizon: int
+    direction: float  # -1.0 to 1.0, representing field movement prediction
+    confidence: float
+    stake: float
+    expected_return: float
+
+@dataclass
+class ArbitrageOpportunity:
+    short_horizon: int
+    long_horizon: int
+    spread: float
+    expected_profit: float
+    risk_score: float
+
+class TemporalOrderBook:
+    def __init__(self, max_horizon: int = 50):
+        self.max_horizon = max_horizon
+        # Organize orders by horizon
+        self.positions: Dict[int, List[TemporalPosition]] = {}
+        # Track spreads between horizons
+        self.horizon_spreads: Dict[Tuple[int, int], float] = {}
+        # Liquidation queue
+        self.liquidation_queue = []
+    
+    def post_position(self, position: TemporalPosition) -> bool:
+        """Post a new temporal position to the order book"""
+        if position.horizon not in self.positions:
+            self.positions[position.horizon] = []
+        
+        self.positions[position.horizon].append(position)
+        
+        # Schedule liquidation
+        heapq.heappush(
+            self.liquidation_queue,
+            (position.entry_time + position.horizon, position)
+        )
+        
+        # Update spreads
+        self._update_spreads(position.horizon)
+        return True
+    
+    def _update_spreads(self, changed_horizon: int):
+        """Update spread calculations when new positions are added"""
+        for horizon in self.positions.keys():
+            if horizon != changed_horizon:
+                spread = self._calculate_spread(
+                    min(horizon, changed_horizon),
+                    max(horizon, changed_horizon)
+                )
+                self.horizon_spreads[(
+                    min(horizon, changed_horizon),
+                    max(horizon, changed_horizon)
+                )] = spread
+    
+    def _calculate_spread(
+        self,
+        short_horizon: int,
+        long_horizon: int
+    ) -> float:
+        """Calculate the spread between two horizons"""
+        if (short_horizon not in self.positions or
+            long_horizon not in self.positions):
+            return 0.0
+        
+        # Weight positions by stake and confidence
+        short_consensus = np.mean([
+            p.direction * p.confidence * p.stake
+            for p in self.positions[short_horizon]
+        ])
+        
+        long_consensus = np.mean([
+            p.direction * p.confidence * p.stake
+            for p in self.positions[long_horizon]
+        ])
+        
+        return float(short_consensus - long_consensus)
+
+class TemporalArbitrageur:
+    def __init__(
+        self,
+        validator_id: str,
+        initial_stake: float,
+        min_spread: float = 0.1,
+        max_positions: int = 5
+    ):
+        self.validator_id = validator_id
+        self.stake = initial_stake
+        self.min_spread = min_spread
+        self.max_positions = max_positions
+        
+        # Position tracking
+        self.active_positions: List[TemporalPosition] = []
+        self.position_history = deque(maxlen=1000)
+        
+        # Performance metrics
+        self.profit_loss = 0.0
+        self.win_rate = 0.5
+        
+        # Strategy adaptation
+        self.spread_model = self._build_spread_model()
+    
+    def _build_spread_model(self) -> tf.keras.Model:
+        """Build model for spread prediction"""
+        model = tf.keras.Sequential([
+            tf.keras.layers.Dense(64, input_dim=5),
+            tf.keras.layers.LeakyReLU(),
+            tf.keras.layers.Dense(32),
+            tf.keras.layers.LeakyReLU(),
+            tf.keras.layers.Dense(1)
+        ])
+        
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(0.001),
+            loss='mse'
+        )
+        return model
+    
+    def find_opportunities(
+        self,
+        order_book: TemporalOrderBook,
+        market_condition: MarketCondition
+    ) -> List[ArbitrageOpportunity]:
+        """Find arbitrage opportunities in the order book"""
+        opportunities = []
+        
+        for (short_h, long_h), spread in order_book.horizon_spreads.items():
+            if abs(spread) < self.min_spread:
+                continue
+            
+            # Predict spread evolution
+            expected_spread = self._predict_spread(
+                short_h,
+                long_h,
+                spread,
+                market_condition
+            )
+            
+            # Calculate expected profit
+            profit = self._calculate_expected_profit(
+                spread,
+                expected_spread,
+                short_h,
+                long_h
+            )
+            
+            # Calculate risk score
+            risk = self._calculate_risk_score(
+                short_h,
+                long_h,
+                market_condition
+            )
+            
+            if profit > 0:
+                opportunities.append(ArbitrageOpportunity(
+                    short_horizon=short_h,
+                    long_horizon=long_h,
+                    spread=spread,
+                    expected_profit=profit,
+                    risk_score=risk
+                ))
+        
+        return sorted(
+            opportunities,
+            key=lambda x: x.expected_profit / x.risk_score,
+            reverse=True
+        )
+    
+    def _predict_spread(
+        self,
+        short_horizon: int,
+        long_horizon: int,
+        current_spread: float,
+        market_condition: MarketCondition
+    ) -> float:
+        """Predict how spread will evolve"""
+        features = [
+            current_spread,
+            short_horizon,
+            long_horizon,
+            market_condition.volatility,
+            market_condition.field_entropy
+        ]
+        
+        return float(self.spread_model.predict(
+            tf.expand_dims(features, 0),
+            verbose=0
+        )[0])
+    
+    def _calculate_expected_profit(
+        self,
+        current_spread: float,
+        expected_spread: float,
+        short_horizon: int,
+        long_horizon: int
+    ) -> float:
+        """Calculate expected profit from arbitrage position"""
+        # Base profit from spread convergence
+        spread_profit = abs(current_spread - expected_spread)
+        
+        # Time decay factor
+        time_factor = np.exp(-(long_horizon - short_horizon) / 20)
+        
+        # Historical performance adjustment
+        history_factor = 0.5 + 0.5 * self.win_rate
+        
+        return spread_profit * time_factor * history_factor
+    
+    def _calculate_risk_score(
+        self,
+        short_horizon: int,
+        long_horizon: int,
+        market_condition: MarketCondition
+    ) -> float:
+        """Calculate risk score for an arbitrage position"""
+        # Base risk from horizon length
+        horizon_risk = (long_horizon - short_horizon) / 20
+        
+        # Market condition risk
+        market_risk = (
+            market_condition.volatility +
+            market_condition.field_entropy
+        ) / 2
+        
+        # Position concentration risk
+        concentration_risk = len(self.active_positions) / self.max_positions
+        
+        return 1.0 + horizon_risk + market_risk + concentration_risk
+    
+    def execute_arbitrage(
+        self,
+        opportunity: ArbitrageOpportunity,
+        order_book: TemporalOrderBook,
+        current_time: int
+    ) -> Tuple[TemporalPosition, TemporalPosition]:
+        """Execute an arbitrage trade"""
+        # Calculate position sizes
+        total_stake = min(
+            self.stake * 0.2,  # Max 20% of stake per arbitrage
+            self.stake / (len(self.active_positions) + 2)
+        )
+        
+        # Create opposing positions
+        short_pos = TemporalPosition(
+            validator_id=self.validator_id,
+            entry_time=current_time,
+            horizon=opportunity.short_horizon,
+            direction=-np.sign(opportunity.spread),
+            confidence=1.0 / opportunity.risk_score,
+            stake=total_stake / 2,
+            expected_return=opportunity.expected_profit / 2
+        )
+        
+        long_pos = TemporalPosition(
+            validator_id=self.validator_id,
+            entry_time=current_time,
+            horizon=opportunity.long_horizon,
+            direction=np.sign(opportunity.spread),
+            confidence=1.0 / opportunity.risk_score,
+            stake=total_stake / 2,
+            expected_return=opportunity.expected_profit / 2
+        )
+        
+        # Post positions
+        order_book.post_position(short_pos)
+        order_book.post_position(long_pos)
+        
+        # Track positions
+        self.active_positions.extend([short_pos, long_pos])
+        
+        return short_pos, long_pos
+    
+    def update_strategy(
+        self,
+        closed_positions: List[Tuple[TemporalPosition, float]]
+    ):
+        """Update strategy based on closed position results"""
+        if not closed_positions:
+            return
+        
+        # Update performance metrics
+        profits = [profit for _, profit in closed_positions]
+        self.profit_loss += sum(profits)
+        self.win_rate = (
+            0.95 * self.win_rate +
+            0.05 * (sum(p > 0 for p in profits) / len(profits))
+        )
+        
+        # Update spread model
+        if len(self.position_history) >= 32:
+            self._train_spread_model()
+    
+    def _train_spread_model(self):
+        """Train spread prediction model on historical data"""
+        # Extract training data from history
+        X, y = [], []
+        for pos in self.position_history:
+            features = [
+                pos.direction,
+                pos.horizon,
+                pos.confidence,
+                pos.stake,
+                pos.expected_return
+            ]
+            X.append(features)
+            y.append(pos.expected_return)  # Predict actual returns
+        
+        X = tf.constant(X, dtype=tf.float32)
+        y = tf.constant(y, dtype=tf.float32)
+        
+        # Train model
+        self.spread_model.train_on_batch(X, y)
+
+class TemporalMarketplace:
+    def __init__(
+        self,
+        num_validators: int,
+        num_arbitrageurs: int,
+        field_shape: Tuple[int, ...],
+        vector_dims: int
+    ):
+        # Core components
+        self.order_book = TemporalOrderBook()
+        self.validators = [
+            AdaptiveTimeScaleValidator(field_shape, vector_dims)
+            for _ in range(num_validators)
+        ]
+        self.arbitrageurs = [
+            TemporalArbitrageur(f"arb_{i}", initial_stake=1000.0)
+            for i in range(num_arbitrageurs)
+        ]
+        
+        self.current_time = 0
+        
+    def step(self, market_condition: MarketCondition):
+        """Process one time step in the marketplace"""
+        self.current_time += 1
+        
+        # Validators make predictions
+        for validator in self.validators:
+            predictions, _ = validator.predict(market_condition)
+            
+            # Post predictions to order book
+            for horizon, field, confidence in predictions:
+                position = TemporalPosition(
+                    validator_id=id(validator),
+                    entry_time=self.current_time,
+                    horizon=horizon,
+                    direction=tf.reduce_mean(field),
+                    confidence=confidence,
+                    stake=validator.stake * 0.1,
+                    expected_return=1.0
+                )
+                self.order_book.post_position(position)
+        
+        # Arbitrageurs scan for opportunities
+        for arb in self.arbitrageurs:
+            opportunities = arb.find_opportunities(
+                self.order_book,
+                market_condition
+            )
+            
+            # Execute best opportunities
+            for opp in opportunities[:2]:  # Limit positions per step
+                arb.execute_arbitrage(
+                    opp,
+                    self.order_book,
+                    self.current_time
+                )
+        
+        # Process liquidations
+        self._process_liquidations()
+    
+    def _process_liquidations(self):
+        """Process mature positions"""
+        while (self.order_book.liquidation_queue and
+               self.order_book.liquidation_queue[0][0] <= self.current_time):
+            _, position = heapq.heappop(self.order_book.liquidation_queue)
+            
+            # Calculate position outcome
+            profit = random.normalvariate(  # Simplified for example
+                position.expected_return,
+                0.2
+            )
+            
+            # Update arbitrageur if applicable
+            for arb in self.arbitrageurs:
+                if position.validator_id == arb.validator_id:
+                    arb.update_strategy([(position, profit)])
+                    break
+
+def run_market_test():
+    """Test the temporal marketplace"""
+    market = TemporalMarketplace(
+        num_validators=3,
+        num_arbitrageurs=2,
+        field_shape=(4, 4),
+        vector_dims=3
+    )
+    
+    # Run simulation
+    for i in range(100):
+        condition = MarketCondition(
+            field_entropy=random.random(),
+            volatility=0.1 + 0.2 * np.sin(i/10),
+            recent_accuracy={h: random.random() for h in [1, 5, 10, 20]},
+            global_consensus=0.8
+        )
+        
+        market.step(condition)
+        
+        if i % 10 == 0:
+            print(f"\nStep {i}:")
+            print("Active Spreads:", 
+                  len(market.order_book.horizon_spreads))
+            print("Arbitrageur P&L:", [
+                arb.profit_loss for arb in market.arbitrageurs
+            ])
+    
+    return market
+
+if __name__ == "__main__":
+    market = run_market_test()
