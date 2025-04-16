@@ -1,0 +1,437 @@
+import tensorflow as tf
+import numpy as np
+from dataclasses import dataclass
+from typing import Dict, List, Tuple, Optional
+from collections import deque
+import heapq
+
+@dataclass
+class TransitionSurface:
+    surface_id: str
+    stability: float
+    permeability: float
+    transition_frequency: float
+    characteristic_length: float
+
+@dataclass
+class TransitionWarning:
+    risk_score: float
+    momentum_vector: np.ndarray
+    surface_proximity: float
+    warning_signals: Dict[str, float]
+    time_to_transition: int
+
+@dataclass
+class RegimeTransition:
+    from_regime: str
+    to_regime: str
+    probability: float
+    expected_duration: int
+    transition_path: List[str]
+
+class RegimeTransitionDetector:
+    def __init__(
+        self,
+        latent_dim: int = 8,
+        history_window: int = 100,
+        min_signal_strength: float = 0.3
+    ):
+        self.latent_dim = latent_dim
+        self.history_window = history_window
+        self.min_signal_strength = min_signal_strength
+        
+        # Neural components
+        self.transition_surface_model = self._build_surface_model()
+        self.momentum_predictor = self._build_momentum_predictor()
+        self.warning_detector = self._build_warning_detector()
+        
+        # State tracking
+        self.regime_positions = deque(maxlen=history_window)
+        self.momentum_history = deque(maxlen=history_window)
+        self.transition_surfaces: Dict[str, TransitionSurface] = {}
+        
+        # Warning signal tracking
+        self.active_warnings = deque(maxlen=10)
+        self.transition_history = deque(maxlen=1000)
+    
+    def _build_surface_model(self) -> tf.keras.Model:
+        """Build model for transition surface identification"""
+        model = tf.keras.Sequential([
+            tf.keras.layers.Dense(64, input_dim=self.latent_dim),
+            tf.keras.layers.LeakyReLU(),
+            tf.keras.layers.Dropout(0.2),
+            tf.keras.layers.Dense(32),
+            tf.keras.layers.LeakyReLU(),
+            # Output: [stability, permeability, frequency, length]
+            tf.keras.layers.Dense(4, activation='sigmoid')
+        ])
+        
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(0.001),
+            loss='mse'
+        )
+        return model
+    
+    def _build_momentum_predictor(self) -> tf.keras.Model:
+        """Build model for regime momentum prediction"""
+        # Encoder branch
+        inputs = tf.keras.Input(shape=(None, self.latent_dim))
+        x = tf.keras.layers.LSTM(32, return_sequences=True)(inputs)
+        x = tf.keras.layers.LSTM(16)(x)
+        
+        # Momentum prediction branch
+        momentum = tf.keras.layers.Dense(self.latent_dim)(x)
+        
+        # Uncertainty branch
+        uncertainty = tf.keras.layers.Dense(self.latent_dim)(x)
+        
+        model = tf.keras.Model(
+            inputs=inputs,
+            outputs=[momentum, uncertainty]
+        )
+        
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(0.001),
+            loss=['mse', 'mse']
+        )
+        return model
+    
+    def _build_warning_detector(self) -> tf.keras.Model:
+        """Build model for early warning signal detection"""
+        model = tf.keras.Sequential([
+            tf.keras.layers.Dense(32, input_dim=15),
+            tf.keras.layers.LeakyReLU(),
+            tf.keras.layers.Dense(16),
+            tf.keras.layers.LeakyReLU(),
+            # Output: [risk_score, time_to_transition, signal_strengths]
+            tf.keras.layers.Dense(7)
+        ])
+        
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(0.001),
+            loss='mse'
+        )
+        return model
+    
+    def update_transition_surfaces(
+        self,
+        latent_position: np.ndarray,
+        regime_state: RegimeState
+    ):
+        """Update transition surface models"""
+        self.regime_positions.append((latent_position, regime_state))
+        
+        if len(self.regime_positions) < 2:
+            return
+        
+        # Detect surface crossings
+        for i in range(1, len(self.regime_positions)):
+            prev_pos, prev_regime = self.regime_positions[i-1]
+            curr_pos, curr_regime = self.regime_positions[i]
+            
+            if prev_regime.macro_regime.name != curr_regime.macro_regime.name:
+                # Surface crossing detected - update or create surface
+                surface_id = f"{prev_regime.macro_regime.name}_{curr_regime.macro_regime.name}"
+                
+                surface_params = self.transition_surface_model.predict(
+                    np.expand_dims(
+                        np.concatenate([prev_pos, curr_pos]),
+                        0
+                    ),
+                    verbose=0
+                )[0]
+                
+                self.transition_surfaces[surface_id] = TransitionSurface(
+                    surface_id=surface_id,
+                    stability=float(surface_params[0]),
+                    permeability=float(surface_params[1]),
+                    transition_frequency=float(surface_params[2]),
+                    characteristic_length=float(surface_params[3])
+                )
+    
+    def calculate_momentum_vector(
+        self,
+        latent_history: np.ndarray
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Calculate regime momentum vector and uncertainty"""
+        if len(latent_history) < 2:
+            return np.zeros(self.latent_dim), np.ones(self.latent_dim)
+        
+        # Predict momentum and uncertainty
+        momentum, uncertainty = self.momentum_predictor.predict(
+            np.expand_dims(latent_history, 0),
+            verbose=0
+        )
+        
+        self.momentum_history.append(momentum[0])
+        
+        return momentum[0], uncertainty[0]
+    
+    def detect_warning_signals(
+        self,
+        regime_state: RegimeState,
+        momentum_vector: np.ndarray,
+        uncertainty: np.ndarray
+    ) -> TransitionWarning:
+        """Detect early warning signals for regime transition"""
+        # Prepare warning features
+        features = np.concatenate([
+            [regime_state.entropy],
+            [regime_state.volatility_adjusted_confidence],
+            momentum_vector,
+            uncertainty,
+            [regime_state.macro_regime.stability],
+            [regime_state.micro_regime.local_volatility]
+        ])
+        
+        # Get warning signals
+        signals = self.warning_detector.predict(
+            np.expand_dims(features, 0),
+            verbose=0
+        )[0]
+        
+        # Decode warning signals
+        risk_score = float(signals[0])
+        time_to_transition = int(max(1, signals[1]))
+        
+        warning_signals = {
+            'entropy_spike': float(signals[2]),
+            'momentum_alignment': float(signals[3]),
+            'surface_proximity': float(signals[4]),
+            'volatility_trend': float(signals[5]),
+            'stability_breakdown': float(signals[6])
+        }
+        
+        # Calculate surface proximity
+        surface_proximity = self._calculate_surface_proximity(
+            momentum_vector,
+            regime_state
+        )
+        
+        warning = TransitionWarning(
+            risk_score=risk_score,
+            momentum_vector=momentum_vector,
+            surface_proximity=surface_proximity,
+            warning_signals=warning_signals,
+            time_to_transition=time_to_transition
+        )
+        
+        if risk_score > self.min_signal_strength:
+            self.active_warnings.append(warning)
+        
+        return warning
+    
+    def _calculate_surface_proximity(
+        self,
+        momentum_vector: np.ndarray,
+        regime_state: RegimeState
+    ) -> float:
+        """Calculate proximity to nearest transition surface"""
+        if not self.transition_surfaces:
+            return 0.0
+        
+        # Find surfaces involving current regime
+        relevant_surfaces = [
+            surface for surface_id, surface in self.transition_surfaces.items()
+            if regime_state.macro_regime.name in surface_id
+        ]
+        
+        if not relevant_surfaces:
+            return 0.0
+        
+        # Calculate minimum proximity
+        proximities = [
+            self._surface_distance(surface, momentum_vector)
+            for surface in relevant_surfaces
+        ]
+        
+        return float(min(proximities))
+    
+    def _surface_distance(
+        self,
+        surface: TransitionSurface,
+        momentum_vector: np.ndarray
+    ) -> float:
+        """Calculate distance to a transition surface"""
+        # Simplified distance calculation using surface characteristics
+        momentum_magnitude = np.linalg.norm(momentum_vector)
+        return float(
+            surface.characteristic_length /
+            (1 + momentum_magnitude * surface.permeability)
+        )
+    
+    def predict_next_regime(
+        self,
+        warning: TransitionWarning,
+        current_regime: RegimeState
+    ) -> Optional[RegimeTransition]:
+        """Predict most likely next regime based on warnings"""
+        if warning.risk_score < self.min_signal_strength:
+            return None
+            
+        # Find candidate transitions
+        candidates = []
+        for surface_id, surface in self.transition_surfaces.items():
+            if current_regime.macro_regime.name in surface_id:
+                # Calculate transition probability
+                prob = self._calculate_transition_probability(
+                    surface,
+                    warning,
+                    current_regime
+                )
+                
+                # Get target regime
+                target_regime = surface_id.replace(
+                    current_regime.macro_regime.name,
+                    ""
+                ).replace("_", "")
+                
+                candidates.append((target_regime, prob, surface))
+        
+        if not candidates:
+            return None
+            
+        # Select most probable transition
+        target_regime, probability, surface = max(
+            candidates,
+            key=lambda x: x[1]
+        )
+        
+        # Calculate transition path
+        path = self._calculate_transition_path(
+            current_regime.macro_regime.name,
+            target_regime,
+            warning
+        )
+        
+        return RegimeTransition(
+            from_regime=current_regime.macro_regime.name,
+            to_regime=target_regime,
+            probability=probability,
+            expected_duration=warning.time_to_transition,
+            transition_path=path
+        )
+    
+    def _calculate_transition_probability(
+        self,
+        surface: TransitionSurface,
+        warning: TransitionWarning,
+        current_regime: RegimeState
+    ) -> float:
+        """Calculate probability of specific transition"""
+        # Base probability from surface characteristics
+        base_prob = surface.transition_frequency * surface.permeability
+        
+        # Adjust for warning signals
+        signal_factor = np.mean(list(warning.warning_signals.values()))
+        
+        # Adjust for regime stability
+        stability_factor = 1.0 - current_regime.macro_regime.stability
+        
+        return float(base_prob * signal_factor * stability_factor)
+    
+    def _calculate_transition_path(
+        self,
+        from_regime: str,
+        to_regime: str,
+        warning: TransitionWarning
+    ) -> List[str]:
+        """Calculate expected path through regime space"""
+        # Start with direct path
+        path = [from_regime, to_regime]
+        
+        # Check for intermediate regimes based on momentum
+        momentum_magnitude = np.linalg.norm(warning.momentum_vector)
+        if momentum_magnitude < 0.5:  # Slow transition
+            # Look for historical transition patterns
+            for transition in self.transition_history:
+                if (transition.from_regime == from_regime and
+                    transition.to_regime == to_regime):
+                    path = transition.transition_path
+                    break
+        
+        return path
+    
+    def monitor_transitions(
+        self,
+        regime_state: RegimeState,
+        latent_position: np.ndarray
+    ) -> Dict:
+        """Monitor and analyze regime transitions"""
+        # Update surfaces
+        self.update_transition_surfaces(latent_position, regime_state)
+        
+        # Calculate momentum
+        latent_history = np.array([
+            pos for pos, _ in list(self.regime_positions)[-10:]
+        ])
+        momentum, uncertainty = self.calculate_momentum_vector(latent_history)
+        
+        # Detect warnings
+        warning = self.detect_warning_signals(
+            regime_state,
+            momentum,
+            uncertainty
+        )
+        
+        # Predict next regime
+        transition = self.predict_next_regime(warning, regime_state)
+        
+        return {
+            "warning": warning,
+            "predicted_transition": transition,
+            "momentum_vector": momentum,
+            "active_surfaces": len(self.transition_surfaces),
+            "risk_score": warning.risk_score
+        }
+
+def run_transition_test():
+    """Test the regime transition detection system"""
+    detector = RegimeTransitionDetector()
+    
+    # Simulate regime evolution
+    for i in range(100):
+        # Simulate regime state
+        regime_state = RegimeState(
+            macro_regime=MacroRegime(
+                name="regime_A",
+                micro_regimes=[],
+                stability=0.8 - 0.3 * (i/100),
+                dominance=0.7,
+                transition_probability=0.2
+            ),
+            micro_regime=MicroRegime(
+                primary_metric="conviction",
+                secondary_metric="innovation",
+                interaction_strength=0.5,
+                local_volatility=0.1 + 0.1 * (i/50),
+                entropy=0.3
+            ),
+            certainty=0.7,
+            volatility_adjusted_confidence=0.6,
+            entropy=0.3
+        )
+        
+        # Simulate latent position
+        latent_position = np.random.random(8)
+        
+        # Monitor transitions
+        results = detector.monitor_transitions(
+            regime_state,
+            latent_position
+        )
+        
+        if i % 10 == 0:
+            print(f"\nStep {i}:")
+            print(f"Risk Score: {results['risk_score']:.3f}")
+            if results['predicted_transition']:
+                print("Predicted Transition:",
+                      results['predicted_transition'].from_regime,
+                      "->",
+                      results['predicted_transition'].to_regime)
+                print(f"Probability: {results['predicted_transition'].probability:.3f}")
+    
+    return detector
+
+if __name__ == "__main__":
+    detector = run_transition_test()
