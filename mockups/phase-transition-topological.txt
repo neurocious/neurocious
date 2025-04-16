@@ -1,0 +1,420 @@
+import tensorflow as tf
+import numpy as np
+from dataclasses import dataclass
+from typing import Dict, List, Tuple, Optional
+from collections import deque
+import heapq
+
+@dataclass
+class RegimePhase:
+    density: float  # Measure of state concentration
+    curvature: float  # Local geometric curvature
+    inertia: float  # Resistance to state change
+    temperature: float  # System energy/volatility
+
+@dataclass
+class PhaseTransition:
+    bifurcation_type: str  # e.g., "pitchfork", "saddle-node"
+    critical_point: float  # Distance to transition point
+    energy_barrier: float  # Required energy for transition
+    instability_modes: List[float]  # Eigenvalues of instability
+
+@dataclass
+class TopologicalState:
+    manifold_dimension: int
+    local_curvature: np.ndarray
+    critical_points: List[np.ndarray]
+    stability_index: float
+
+class PhaseTransitionDetector:
+    def __init__(
+        self,
+        latent_dim: int = 8,
+        num_attention_heads: int = 4,
+        max_sequence_length: int = 128
+    ):
+        self.latent_dim = latent_dim
+        self.num_heads = num_attention_heads
+        self.max_seq_length = max_sequence_length
+        
+        # Neural components
+        self.topology_analyzer = self._build_topology_analyzer()
+        self.phase_transformer = self._build_phase_transformer()
+        self.curvature_estimator = self._build_curvature_estimator()
+        
+        # State tracking
+        self.phase_history = deque(maxlen=1000)
+        self.topology_history = deque(maxlen=1000)
+        self.critical_points = []
+        
+    def _build_topology_analyzer(self) -> tf.keras.Model:
+        """Build network for topological analysis"""
+        # Input branches for different time scales
+        short_input = tf.keras.Input(shape=(32, self.latent_dim))
+        medium_input = tf.keras.Input(shape=(64, self.latent_dim))
+        long_input = tf.keras.Input(shape=(128, self.latent_dim))
+        
+        # Process each time scale
+        short_features = self._build_attention_block(short_input, "short")
+        medium_features = self._build_attention_block(medium_input, "medium")
+        long_features = self._build_attention_block(long_input, "long")
+        
+        # Combine features
+        combined = tf.keras.layers.Concatenate()(
+            [short_features, medium_features, long_features]
+        )
+        
+        # Topology estimation
+        topology = tf.keras.layers.Dense(32, activation='relu')(combined)
+        topology = tf.keras.layers.Dense(16, activation='relu')(topology)
+        
+        # Multiple output heads
+        dimension = tf.keras.layers.Dense(1)(topology)  # Manifold dimension
+        curvature = tf.keras.layers.Dense(self.latent_dim)(topology)  # Local curvature
+        critical = tf.keras.layers.Dense(self.latent_dim)(topology)  # Critical points
+        stability = tf.keras.layers.Dense(1)(topology)  # Stability index
+        
+        model = tf.keras.Model(
+            inputs=[short_input, medium_input, long_input],
+            outputs=[dimension, curvature, critical, stability]
+        )
+        
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(0.001),
+            loss=['mse', 'mse', 'mse', 'mse']
+        )
+        return model
+    
+    def _build_phase_transformer(self) -> tf.keras.Model:
+        """Build transformer for phase transition detection"""
+        # Input and positional encoding
+        inputs = tf.keras.Input(shape=(None, self.latent_dim))
+        positions = tf.keras.layers.Embedding(
+            self.max_seq_length,
+            self.latent_dim
+        )(tf.range(start=0, limit=self.max_seq_length, delta=1))
+        
+        # Multi-head attention layers
+        x = inputs + positions[:tf.shape(inputs)[1]]
+        
+        for _ in range(3):  # 3 transformer blocks
+            # Multi-head attention
+            attention_output = tf.keras.layers.MultiHeadAttention(
+                num_heads=self.num_heads,
+                key_dim=self.latent_dim // self.num_heads
+            )(x, x)
+            
+            # Add & normalize
+            x = tf.keras.layers.LayerNormalization()(x + attention_output)
+            
+            # Feed-forward network
+            ffn = tf.keras.Sequential([
+                tf.keras.layers.Dense(self.latent_dim * 4, activation='relu'),
+                tf.keras.layers.Dense(self.latent_dim)
+            ])
+            
+            x = tf.keras.layers.LayerNormalization()(x + ffn(x))
+        
+        # Phase transition detection heads
+        bifurcation = tf.keras.layers.Dense(4, activation='softmax')(x[:, 0, :])
+        critical_point = tf.keras.layers.Dense(1)(x[:, 0, :])
+        energy = tf.keras.layers.Dense(1)(x[:, 0, :])
+        modes = tf.keras.layers.Dense(self.latent_dim)(x[:, 0, :])
+        
+        model = tf.keras.Model(
+            inputs=inputs,
+            outputs=[bifurcation, critical_point, energy, modes]
+        )
+        
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(0.001),
+            loss=['categorical_crossentropy', 'mse', 'mse', 'mse']
+        )
+        return model
+    
+    def _build_curvature_estimator(self) -> tf.keras.Model:
+        """Build network for manifold curvature estimation"""
+        model = tf.keras.Sequential([
+            tf.keras.layers.Dense(64, input_dim=self.latent_dim),
+            tf.keras.layers.LeakyReLU(),
+            tf.keras.layers.Dense(32),
+            tf.keras.layers.LeakyReLU(),
+            # Output Riemann curvature tensor components
+            tf.keras.layers.Dense(self.latent_dim * self.latent_dim)
+        ])
+        
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(0.001),
+            loss='mse'
+        )
+        return model
+    
+    def _build_attention_block(
+        self,
+        inputs: tf.keras.layers.Layer,
+        scope: str
+    ) -> tf.keras.layers.Layer:
+        """Build attention block for specific time scale"""
+        # Self-attention
+        attention = tf.keras.layers.MultiHeadAttention(
+            num_heads=self.num_heads,
+            key_dim=self.latent_dim // self.num_heads
+        )(inputs, inputs)
+        
+        # Add & normalize
+        x = tf.keras.layers.LayerNormalization()(inputs + attention)
+        
+        # Feed-forward
+        ffn = tf.keras.Sequential([
+            tf.keras.layers.Dense(self.latent_dim * 2, activation='relu'),
+            tf.keras.layers.Dense(self.latent_dim)
+        ])
+        
+        x = tf.keras.layers.LayerNormalization()(x + ffn(x))
+        
+        # Global context
+        return tf.keras.layers.GlobalAveragePooling1D()(x)
+    
+    def analyze_topology(
+        self,
+        latent_history: np.ndarray
+    ) -> TopologicalState:
+        """Analyze topological structure of regime space"""
+        # Prepare multi-scale inputs
+        short_seq = latent_history[-32:]
+        medium_seq = latent_history[-64:]
+        long_seq = latent_history[-128:]
+        
+        # Pad sequences if necessary
+        short_seq = self._pad_sequence(short_seq, 32)
+        medium_seq = self._pad_sequence(medium_seq, 64)
+        long_seq = self._pad_sequence(long_seq, 128)
+        
+        # Get topological analysis
+        dimension, curvature, critical, stability = self.topology_analyzer.predict(
+            [
+                np.expand_dims(short_seq, 0),
+                np.expand_dims(medium_seq, 0),
+                np.expand_dims(long_seq, 0)
+            ],
+            verbose=0
+        )
+        
+        # Create topological state
+        state = TopologicalState(
+            manifold_dimension=int(dimension[0][0]),
+            local_curvature=curvature[0],
+            critical_points=[critical[0]],
+            stability_index=float(stability[0][0])
+        )
+        
+        self.topology_history.append(state)
+        return state
+    
+    def _pad_sequence(
+        self,
+        sequence: np.ndarray,
+        target_length: int
+    ) -> np.ndarray:
+        """Pad sequence to target length"""
+        if len(sequence) < target_length:
+            padding = np.zeros((target_length - len(sequence), self.latent_dim))
+            return np.vstack([padding, sequence])
+        return sequence[-target_length:]
+    
+    def detect_phase_transition(
+        self,
+        latent_sequence: np.ndarray
+    ) -> Tuple[PhaseTransition, RegimePhase]:
+        """Detect phase transitions in regime space"""
+        # Prepare sequence
+        sequence = self._pad_sequence(latent_sequence, self.max_seq_length)
+        
+        # Get phase transition predictions
+        bifurcation, critical, energy, modes = self.phase_transformer.predict(
+            np.expand_dims(sequence, 0),
+            verbose=0
+        )
+        
+        # Decode bifurcation type
+        bifurcation_types = [
+            "pitchfork",
+            "saddle-node",
+            "transcritical",
+            "hopf"
+        ]
+        bifurcation_type = bifurcation_types[np.argmax(bifurcation[0])]
+        
+        # Calculate phase characteristics
+        phase = self._calculate_phase_characteristics(sequence)
+        
+        # Create phase transition
+        transition = PhaseTransition(
+            bifurcation_type=bifurcation_type,
+            critical_point=float(critical[0][0]),
+            energy_barrier=float(energy[0][0]),
+            instability_modes=list(modes[0])
+        )
+        
+        return transition, phase
+    
+    def _calculate_phase_characteristics(
+        self,
+        sequence: np.ndarray
+    ) -> RegimePhase:
+        """Calculate characteristics of current phase"""
+        # Calculate state density (using KDE)
+        density = self._estimate_density(sequence)
+        
+        # Estimate local curvature
+        curvature = float(np.mean(
+            self.curvature_estimator.predict(
+                sequence[-1:],
+                verbose=0
+            )
+        ))
+        
+        # Calculate phase inertia
+        inertia = self._calculate_inertia(sequence)
+        
+        # Estimate temperature (system energy)
+        temperature = self._estimate_temperature(sequence)
+        
+        return RegimePhase(
+            density=density,
+            curvature=curvature,
+            inertia=inertia,
+            temperature=temperature
+        )
+    
+    def _estimate_density(self, sequence: np.ndarray) -> float:
+        """Estimate local state density"""
+        # Simple density estimation using nearest neighbors
+        dists = np.linalg.norm(
+            sequence - sequence[-1],
+            axis=1
+        )
+        return float(1.0 / (np.mean(dists) + 1e-6))
+    
+    def _calculate_inertia(self, sequence: np.ndarray) -> float:
+        """Calculate regime inertia"""
+        if len(sequence) < 2:
+            return 1.0
+            
+        # Calculate resistance to state changes
+        velocities = np.linalg.norm(
+            sequence[1:] - sequence[:-1],
+            axis=1
+        )
+        return float(1.0 / (np.mean(velocities) + 1e-6))
+    
+    def _estimate_temperature(self, sequence: np.ndarray) -> float:
+        """Estimate system temperature"""
+        if len(sequence) < 2:
+            return 0.0
+            
+        # Calculate average state energy
+        energy = np.mean([
+            np.linalg.norm(v) for v in sequence
+        ])
+        
+        # Add volatility component
+        volatility = np.std([
+            np.linalg.norm(v) for v in sequence
+        ])
+        
+        return float(energy * volatility)
+    
+    def get_transition_analytics(self) -> Dict:
+        """Get comprehensive transition analytics"""
+        if len(self.topology_history) < 2:
+            return {}
+            
+        current_topology = self.topology_history[-1]
+        
+        analytics = {
+            "manifold": {
+                "dimension": current_topology.manifold_dimension,
+                "stability": current_topology.stability_index,
+                "curvature_norm": float(np.linalg.norm(
+                    current_topology.local_curvature
+                ))
+            },
+            "critical_points": len(self.critical_points),
+            "topology_trend": self._calculate_topology_trend(),
+            "transition_risk": self._calculate_transition_risk()
+        }
+        
+        return analytics
+    
+    def _calculate_topology_trend(self) -> Dict[str, float]:
+        """Calculate trends in topological measures"""
+        if len(self.topology_history) < 10:
+            return {}
+            
+        recent = list(self.topology_history)[-10:]
+        
+        return {
+            "dimension_trend": float(np.mean([
+                s.manifold_dimension for s in recent
+            ])),
+            "stability_trend": float(np.mean([
+                s.stability_index for s in recent
+            ])),
+            "curvature_trend": float(np.mean([
+                np.linalg.norm(s.local_curvature) for s in recent
+            ]))
+        }
+    
+    def _calculate_transition_risk(self) -> float:
+        """Calculate overall transition risk"""
+        if len(self.topology_history) < 2:
+            return 0.0
+            
+        current = self.topology_history[-1]
+        
+        # Combine multiple risk factors
+        curvature_risk = np.linalg.norm(current.local_curvature)
+        stability_risk = 1.0 - current.stability_index
+        dimension_risk = abs(
+            current.manifold_dimension -
+            self.topology_history[-2].manifold_dimension
+        )
+        
+        return float(
+            0.4 * curvature_risk +
+            0.4 * stability_risk +
+            0.2 * dimension_risk
+        )
+
+def run_phase_test():
+    """Test the phase transition detection system"""
+    detector = PhaseTransitionDetector()
+    
+    # Generate test data
+    sequence = np.random.randn(200, 8)  # 200 steps in 8D latent space
+    
+    # Simulate regime evolution
+    for i in range(100):
+        # Update sequence
+        new_point = sequence[i:i+100]
+        
+        # Analyze topology
+        topology = detector.analyze_topology(new_point)
+        
+        # Detect phase transitions
+        transition, phase = detector.detect_phase_transition(new_point)
+        
+        if i % 10 == 0:
+            print(f"\nStep {i}:")
+            print(f"Bifurcation Type: {transition.bifurcation_type}")
+            print(f"Phase Density: {phase.density:.3f}")
+            print(f"Manifold Dimension: {topology.manifold_dimension}")
+            
+            analytics = detector.get_transition_analytics()
+            print(f"Transition Risk: {analytics.get('transition_risk', 0):.3f}")
+    
+    return detector
+
+if __name__ == "__main__":
+    detector = run_phase_test()
