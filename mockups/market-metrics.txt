@@ -1,0 +1,240 @@
+import numpy as np
+import pandas as pd
+from typing import Dict, List, Tuple
+from dataclasses import dataclass
+import tensorflow as tf
+
+@dataclass
+class RawMarketData:
+    """Raw market data container"""
+    timestamp: np.ndarray        # Time series timestamps
+    price: np.ndarray           # Price series
+    volume: np.ndarray          # Volume series
+    order_flow: np.ndarray      # Net order flow
+    trade_sizes: np.ndarray     # Trade size distribution
+    bid_ask_spread: np.ndarray  # Spread over time
+    depth: Dict[float, float]   # Order book depth at price levels
+    sentiment: np.ndarray       # Market sentiment scores
+    news_impact: np.ndarray     # News relevance scores
+
+class MarketMetricsBuilder:
+    def __init__(self, 
+                 lookback_window: int = 100,
+                 coherence_threshold: float = 0.6,
+                 volatility_window: int = 20):
+        self.lookback_window = lookback_window
+        self.coherence_threshold = coherence_threshold
+        self.volatility_window = volatility_window
+        
+        # Initialize TensorFlow components for metric computation
+        self.coherence_model = self._build_coherence_model()
+        self.conviction_model = self._build_conviction_model()
+        
+    def _build_coherence_model(self) -> tf.keras.Model:
+        """Builds model to measure market coherence"""
+        model = tf.keras.Sequential([
+            tf.keras.layers.Dense(32, input_dim=5),
+            tf.keras.layers.LeakyReLU(),
+            tf.keras.layers.Dense(16),
+            tf.keras.layers.LeakyReLU(),
+            tf.keras.layers.Dense(1, activation='sigmoid')
+        ])
+        return model
+        
+    def _build_conviction_model(self) -> tf.keras.Model:
+        """Builds model to measure market conviction"""
+        model = tf.keras.Sequential([
+            tf.keras.layers.LSTM(32, input_shape=(None, 5)),
+            tf.keras.layers.Dense(16),
+            tf.keras.layers.LeakyReLU(),
+            tf.keras.layers.Dense(1, activation='sigmoid')
+        ])
+        return model
+
+    def calculate_health_index(self, data: RawMarketData) -> float:
+        """Calculate overall market health index"""
+        # Compute component metrics
+        volatility = self._calculate_volatility(data.price)
+        liquidity = self._calculate_liquidity(data.depth, data.bid_ask_spread)
+        orderflow_stability = self._calculate_orderflow_stability(data.order_flow)
+        sentiment_consensus = self._calculate_sentiment_consensus(data.sentiment)
+        
+        # Combine metrics with learned weights
+        health_score = (
+            0.3 * (1 - volatility) +          # Lower volatility is healthier
+            0.3 * liquidity +                 # Higher liquidity is healthier
+            0.2 * orderflow_stability +       # Stable order flow is healthier
+            0.2 * sentiment_consensus         # Consensus sentiment is healthier
+        )
+        
+        return float(health_score)
+    
+    def _calculate_volatility(self, price: np.ndarray) -> float:
+        """Calculate normalized volatility"""
+        returns = np.diff(np.log(price))
+        rolling_vol = np.std(returns[-self.volatility_window:])
+        return min(1.0, rolling_vol * 100)  # Scale to 0-1
+        
+    def _calculate_liquidity(self, 
+                           depth: Dict[float, float],
+                           spread: np.ndarray) -> float:
+        """Calculate market liquidity score"""
+        # Combine depth and spread metrics
+        avg_spread = np.mean(spread[-self.lookback_window:])
+        total_depth = sum(depth.values())
+        
+        # Normalize and combine
+        spread_score = 1 / (1 + avg_spread)
+        depth_score = min(1.0, total_depth / 1000000)  # Normalize to large number
+        
+        return (spread_score + depth_score) / 2
+
+    def _calculate_orderflow_stability(self, order_flow: np.ndarray) -> float:
+        """Calculate order flow stability"""
+        # Look at recent order flow pattern
+        recent_flow = order_flow[-self.lookback_window:]
+        
+        # Calculate metrics
+        flow_volatility = np.std(recent_flow) / np.mean(np.abs(recent_flow))
+        flow_trend = np.corrcoef(np.arange(len(recent_flow)), recent_flow)[0,1]
+        
+        stability = 1 / (1 + flow_volatility)
+        if not np.isnan(flow_trend):
+            stability *= (1 + abs(flow_trend)) / 2
+            
+        return float(stability)
+
+    def _calculate_sentiment_consensus(self, sentiment: np.ndarray) -> float:
+        """Calculate sentiment consensus strength"""
+        recent_sentiment = sentiment[-self.lookback_window:]
+        
+        # Calculate sentiment agreement
+        sentiment_std = np.std(recent_sentiment)
+        sentiment_trend = np.mean(recent_sentiment)
+        
+        # Combine into consensus score
+        consensus = 1 / (1 + sentiment_std)
+        consensus *= abs(sentiment_trend)
+        
+        return float(consensus)
+
+    def calculate_systemic_risk(self, data: RawMarketData) -> float:
+        """Calculate systemic risk level"""
+        # Component risk metrics
+        vol_risk = self._calculate_volatility_risk(data.price)
+        liquidity_risk = self._calculate_liquidity_risk(data.depth, data.bid_ask_spread)
+        sentiment_risk = self._calculate_sentiment_risk(data.sentiment)
+        size_concentration = self._calculate_size_concentration(data.trade_sizes)
+        
+        # Combine risk metrics with emphasis on spillover potential
+        systemic_risk = (
+            0.3 * vol_risk +
+            0.3 * liquidity_risk +
+            0.2 * sentiment_risk +
+            0.2 * size_concentration
+        )
+        
+        return float(systemic_risk)
+
+    def calculate_coherence_score(self, data: RawMarketData) -> float:
+        """Calculate market coherence score"""
+        # Prepare features
+        features = np.column_stack([
+            self._normalize_series(data.price[-self.lookback_window:]),
+            self._normalize_series(data.volume[-self.lookback_window:]),
+            self._normalize_series(data.order_flow[-self.lookback_window:]),
+            self._normalize_series(data.sentiment[-self.lookback_window:]),
+            self._normalize_series(data.news_impact[-self.lookback_window:])
+        ])
+        
+        # Get coherence prediction
+        coherence = float(self.coherence_model.predict(
+            features.mean(axis=0).reshape(1, -1),
+            verbose=0
+        ))
+        
+        return coherence
+
+    def calculate_conviction_stability(self, data: RawMarketData) -> float:
+        """Calculate conviction stability"""
+        # Prepare sequence data
+        features = np.column_stack([
+            self._normalize_series(data.price[-self.lookback_window:]),
+            self._normalize_series(data.volume[-self.lookback_window:]),
+            self._normalize_series(data.order_flow[-self.lookback_window:]),
+            self._normalize_series(data.bid_ask_spread[-self.lookback_window:]),
+            self._normalize_series(data.sentiment[-self.lookback_window:])
+        ])
+        
+        # Get conviction prediction
+        conviction = float(self.conviction_model.predict(
+            features.reshape(1, self.lookback_window, 5),
+            verbose=0
+        ))
+        
+        return conviction
+
+    def _normalize_series(self, series: np.ndarray) -> np.ndarray:
+        """Normalize a time series to 0-1 range"""
+        min_val = np.min(series)
+        max_val = np.max(series)
+        if max_val > min_val:
+            return (series - min_val) / (max_val - min_val)
+        return np.zeros_like(series)
+
+    def calculate_fork_tension(self, data: RawMarketData) -> float:
+        """Calculate market fork tension"""
+        # Look for divergences in indicators
+        price_trend = self._calculate_trend(data.price)
+        volume_trend = self._calculate_trend(data.volume)
+        sentiment_trend = self._calculate_trend(data.sentiment)
+        
+        # Calculate tension from trend divergences
+        tension = (
+            abs(price_trend - volume_trend) +
+            abs(price_trend - sentiment_trend) +
+            abs(volume_trend - sentiment_trend)
+        ) / 3
+        
+        return float(tension)
+
+    def _calculate_trend(self, series: np.ndarray) -> float:
+        """Calculate normalized trend strength"""
+        x = np.arange(len(series[-self.lookback_window:]))
+        trend = np.polyfit(x, series[-self.lookback_window:], 1)[0]
+        return float(np.tanh(trend * 10))  # Normalize to -1 to 1
+
+    def build_market_state(self, data: RawMarketData) -> Dict:
+        """Build complete market state from raw data"""
+        return {
+            'health_index': self.calculate_health_index(data),
+            'systemic_risk': self.calculate_systemic_risk(data),
+            'coherence_score': self.calculate_coherence_score(data),
+            'conviction_stability': self.calculate_conviction_stability(data),
+            'fork_tension': self.calculate_fork_tension(data)
+        }
+
+# Example usage
+def process_market_data(price_data: pd.DataFrame) -> Dict:
+    """Process raw market data into Neurocious metrics"""
+    
+    # Create metrics builder
+    builder = MarketMetricsBuilder(lookback_window=100)
+    
+    # Convert data to expected format
+    raw_data = RawMarketData(
+        timestamp=price_data.index.values,
+        price=price_data['close'].values,
+        volume=price_data['volume'].values,
+        order_flow=price_data['volume'].diff().values,  # Simple approximation
+        trade_sizes=price_data['volume'].values,        # Would need actual trade sizes
+        bid_ask_spread=price_data['high'] - price_data['low'],  # Approximation
+        depth={},  # Would need actual order book data
+        sentiment=np.zeros(len(price_data)),  # Would need actual sentiment data
+        news_impact=np.zeros(len(price_data))  # Would need actual news impact data
+    )
+    
+    # Build market state
+    market_state = builder.build_market_state(raw_data)
+    
+    return market_state
