@@ -1,0 +1,263 @@
+public class FieldParameters
+{
+    public double Curvature { get; set; }
+    public double Entropy { get; set; }
+    public double Alignment { get; set; }
+
+    public FieldParameters(Tensor fieldParams)
+    {
+        Curvature = fieldParams.Data[0];
+        Entropy = fieldParams.Data[1];
+        Alignment = fieldParams.Data[2];
+    }
+
+    public Tensor ToTensor()
+    {
+        return new Tensor(new[] { 3 }, new[] { Curvature, Entropy, Alignment });
+    }
+}
+
+public class AttentionBlock
+{
+    private const int NUM_HEADS = 4;
+    private readonly int hiddenDim;
+    private readonly double dropoutRate = 0.1;
+    
+    private PradOp queryProj;
+    private PradOp keyProj;
+    private PradOp valueProj;
+    private PradOp outputProj;
+    private PradOp layerNorm;
+
+    public AttentionBlock(int hiddenDim)
+    {
+        this.hiddenDim = hiddenDim;
+        InitializeWeights();
+    }
+
+    private void InitializeWeights()
+    {
+        var dimPerHead = hiddenDim / NUM_HEADS;
+        
+        queryProj = new PradOp(InitializeWeights(hiddenDim, hiddenDim));
+        keyProj = new PradOp(InitializeWeights(hiddenDim, hiddenDim));
+        valueProj = new PradOp(InitializeWeights(hiddenDim, hiddenDim));
+        outputProj = new PradOp(InitializeWeights(hiddenDim, hiddenDim));
+        layerNorm = new PradOp(InitializeWeights(hiddenDim, hiddenDim));
+    }
+
+    public PradResult Forward(PradOp input, bool training = true)
+    {
+        // Project to Q, K, V
+        var queries = queryProj.MatMul(input);
+        var keys = keyProj.MatMul(input);
+        var values = valueProj.MatMul(input);
+
+        // Split into heads
+        var queryHeads = SplitHeads(queries.Result);
+        var keyHeads = SplitHeads(keys.Result);
+        var valueHeads = SplitHeads(values.Result);
+
+        // Scaled dot-product attention for each head
+        var attentionHeads = new List<PradResult>();
+        for (int h = 0; h < NUM_HEADS; h++)
+        {
+            var scaledDotProduct = new PradOp(queryHeads[h])
+                .MatMul(new PradOp(keyHeads[h]).Transpose().Result)
+                .Then(x => x.Mul(new Tensor(x.Result.Shape, 1.0 / Math.Sqrt(hiddenDim / NUM_HEADS))));
+
+            // Apply causal mask if needed
+            if (training)
+            {
+                scaledDotProduct = ApplyCausalMask(scaledDotProduct);
+            }
+
+            var attention = scaledDotProduct
+                .Then(PradOp.SoftmaxOp)
+                .Then(attn => attn.MatMul(new PradOp(valueHeads[h]).Result));
+
+            attentionHeads.Add(attention);
+        }
+
+        // Concatenate heads and project
+        var concatenated = ConcatenateHeads(attentionHeads);
+        var output = outputProj.MatMul(concatenated.Result);
+
+        // Add residual connection and layer norm
+        return new PradOp(output.Result)
+            .Add(input.Result)
+            .Then(x => layerNorm.MatMul(x.Result));
+    }
+
+    private List<Tensor> SplitHeads(Tensor input)
+    {
+        var dimPerHead = hiddenDim / NUM_HEADS;
+        var heads = new List<Tensor>();
+        
+        for (int h = 0; h < NUM_HEADS; h++)
+        {
+            var head = new double[input.Shape[0] * dimPerHead];
+            for (int i = 0; i < input.Shape[0]; i++)
+            {
+                for (int j = 0; j < dimPerHead; j++)
+                {
+                    head[i * dimPerHead + j] = input.Data[i * hiddenDim + h * dimPerHead + j];
+                }
+            }
+            heads.Add(new Tensor(new[] { input.Shape[0], dimPerHead }, head));
+        }
+        
+        return heads;
+    }
+
+    private PradResult ConcatenateHeads(List<PradResult> heads)
+    {
+        var dimPerHead = hiddenDim / NUM_HEADS;
+        var concatenated = new double[heads[0].Result.Shape[0] * hiddenDim];
+        
+        for (int h = 0; h < NUM_HEADS; h++)
+        {
+            for (int i = 0; i < heads[h].Result.Shape[0]; i++)
+            {
+                for (int j = 0; j < dimPerHead; j++)
+                {
+                    concatenated[i * hiddenDim + h * dimPerHead + j] = 
+                        heads[h].Result.Data[i * dimPerHead + j];
+                }
+            }
+        }
+        
+        return new PradOp(new Tensor(new[] { heads[0].Result.Shape[0], hiddenDim }, concatenated));
+    }
+
+    private PradResult ApplyCausalMask(PradResult attention)
+    {
+        var shape = attention.Result.Shape;
+        var mask = new double[shape[0] * shape[1]];
+        
+        for (int i = 0; i < shape[0]; i++)
+        {
+            for (int j = 0; j < shape[1]; j++)
+            {
+                mask[i * shape[1] + j] = j <= i ? 1 : float.NegativeInfinity;
+            }
+        }
+        
+        return new PradOp(attention.Result)
+            .Add(new Tensor(shape, mask));
+    }
+}
+
+public class RefinedVAE : EnhancedVAE
+{
+    private readonly List<AttentionBlock> attentionBlocks;
+    private readonly FieldRegularizer fieldRegularizer;
+
+    public RefinedVAE() : base()
+    {
+        attentionBlocks = new List<AttentionBlock>();
+        for (int i = 0; i < 3; i++)
+        {
+            attentionBlocks.Add(new AttentionBlock(HIDDEN_DIM));
+        }
+        
+        fieldRegularizer = new FieldRegularizer();
+    }
+
+    protected override (PradResult reconstruction, FieldParameters fieldParams) 
+        DecodeWithField(PradOp latentVector)
+    {
+        var (reconstruction, rawFieldParams) = base.DecodeWithField(latentVector);
+        
+        // Apply specific activation functions for each field parameter
+        var curvature = new PradOp(rawFieldParams.Result.Indexer("0"))
+            .Then(PradOp.ReluOp);  // Non-negative curvature
+            
+        var entropy = new PradOp(rawFieldParams.Result.Indexer("1"))
+            .Then(PradOp.SigmoidOp);  // Bounded [0,1]
+            
+        var alignment = new PradOp(rawFieldParams.Result.Indexer("2"))
+            .Then(PradOp.TanhOp);  // Directional [-1,1]
+
+        var fieldParams = new FieldParameters(new Tensor(
+            new[] { 3 },
+            new[] { 
+                curvature.Result.Data[0],
+                entropy.Result.Data[0],
+                alignment.Result.Data[0]
+            }));
+
+        return (reconstruction, fieldParams);
+    }
+
+    protected override PradResult ComputeLoss(
+        List<Tensor> inputs,
+        PradResult reconstruction,
+        FieldParameters fieldParams,
+        PradResult mean,
+        PradResult logVar,
+        int epoch)
+    {
+        var baseLoss = base.ComputeLoss(inputs, reconstruction, fieldParams.ToTensor(), mean, logVar, epoch);
+        
+        // Add field regularization losses
+        var fieldRegLoss = fieldRegularizer.ComputeLoss(fieldParams);
+        
+        // Add contrastive loss if we have regime labels
+        var contrastiveLoss = ComputeContrastiveLoss(mean, inputs);
+        
+        // Combine losses with appropriate weights
+        return new PradOp(baseLoss.Result)
+            .Add(fieldRegLoss.Result.Mul(new Tensor(fieldRegLoss.Result.Shape, 0.1)))
+            .Add(contrastiveLoss.Result.Mul(new Tensor(contrastiveLoss.Result.Shape, 0.05)));
+    }
+
+    private PradResult ComputeContrastiveLoss(PradResult latentMean, List<Tensor> inputs)
+    {
+        // Simple contrastive loss using cosine similarity
+        var similarities = new List<PradResult>();
+        
+        for (int i = 0; i < inputs.Count; i++)
+        {
+            for (int j = i + 1; j < inputs.Count; j++)
+            {
+                var similarity = new PradOp(latentMean.Result)
+                    .MatMul(new PradOp(inputs[j]).Transpose().Result)
+                    .Then(x => x.Div(
+                        new PradOp(latentMean.Result).Then(PradOp.SquareRootOp).Result
+                            .ElementwiseMultiply(
+                                new PradOp(inputs[j]).Then(PradOp.SquareRootOp).Result
+                            )
+                    ));
+                    
+                similarities.Add(similarity);
+            }
+        }
+
+        // Average similarity
+        return similarities.Aggregate((a, b) => 
+            new PradOp(a.Result).Add(b.Result))
+            .Then(x => x.Div(new Tensor(x.Result.Shape, similarities.Count)));
+    }
+
+    private class FieldRegularizer
+    {
+        public PradResult ComputeLoss(FieldParameters fieldParams)
+        {
+            var losses = new List<double>();
+            
+            // Curvature smoothness
+            losses.Add(Math.Pow(fieldParams.Curvature, 2) * 0.1);
+            
+            // Entropy bounds
+            losses.Add(Math.Max(0, fieldParams.Entropy - 1) * 10);
+            losses.Add(Math.Max(0, -fieldParams.Entropy) * 10);
+            
+            // Alignment regularization
+            losses.Add(Math.Pow(fieldParams.Alignment, 2) * 0.05);
+            
+            return new PradOp(new Tensor(new[] { 1 }, 
+                new[] { losses.Average() }));
+        }
+    }
+}
