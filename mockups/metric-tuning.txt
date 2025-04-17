@@ -1,0 +1,303 @@
+import numpy as np
+import pandas as pd
+from typing import Dict, List, Tuple
+from sklearn.model_selection import TimeSeriesSplit
+from dataclasses import dataclass
+
+@dataclass
+class MetricParameters:
+    """Parameters for metric calculations"""
+    lookback_window: int        # Historical window size
+    volatility_weight: float    # Weight for volatility in health index
+    liquidity_weight: float     # Weight for liquidity in health index
+    sentiment_weight: float     # Weight for sentiment in health index
+    coherence_threshold: float  # Threshold for coherence calculation
+    trend_sensitivity: float    # Sensitivity to trend calculations
+    noise_threshold: float      # Threshold for noise filtering
+
+class MetricOptimizer:
+    def __init__(self, 
+                 initial_params: MetricParameters,
+                 validation_window: int = 252):  # 1 year of daily data
+        self.current_params = initial_params
+        self.validation_window = validation_window
+        self.performance_history = []
+        
+    def optimize_parameters(self, 
+                          market_data: pd.DataFrame,
+                          target_variable: str,
+                          optimization_metric: str = 'predictive_power') -> MetricParameters:
+        """Optimize metric parameters using grid search"""
+        
+        # Define parameter ranges
+        param_ranges = {
+            'lookback_window': [20, 50, 100, 200],
+            'volatility_weight': np.arange(0.1, 0.5, 0.1),
+            'liquidity_weight': np.arange(0.1, 0.5, 0.1),
+            'sentiment_weight': np.arange(0.1, 0.5, 0.1),
+            'coherence_threshold': np.arange(0.3, 0.9, 0.1),
+            'trend_sensitivity': np.arange(0.5, 2.0, 0.25),
+            'noise_threshold': np.arange(0.1, 0.5, 0.1)
+        }
+        
+        best_score = float('-inf')
+        best_params = self.current_params
+        
+        # Create time series cross-validation splits
+        tscv = TimeSeriesSplit(n_splits=5)
+        
+        for train_idx, val_idx in tscv.split(market_data):
+            train_data = market_data.iloc[train_idx]
+            val_data = market_data.iloc[val_idx]
+            
+            # Grid search over parameters
+            for params in self._parameter_combinations(param_ranges):
+                # Calculate metrics with current parameters
+                train_metrics = self._calculate_metrics_with_params(train_data, params)
+                val_metrics = self._calculate_metrics_with_params(val_data, params)
+                
+                # Evaluate performance
+                score = self._evaluate_performance(
+                    train_metrics, val_metrics,
+                    train_data[target_variable], val_data[target_variable],
+                    optimization_metric
+                )
+                
+                if score > best_score:
+                    best_score = score
+                    best_params = params
+                    
+        return best_params
+    
+    def _parameter_combinations(self, param_ranges: Dict) -> List[MetricParameters]:
+        """Generate parameter combinations for grid search"""
+        import itertools
+        
+        # Get all combinations of parameter values
+        keys, values = zip(*param_ranges.items())
+        combinations = [dict(zip(keys, v)) for v in itertools.product(*values)]
+        
+        # Convert to MetricParameters objects
+        return [MetricParameters(**params) for params in combinations]
+        
+    def _calculate_metrics_with_params(self, 
+                                     data: pd.DataFrame,
+                                     params: MetricParameters) -> Dict[str, np.ndarray]:
+        """Calculate market metrics using given parameters"""
+        
+        metrics = {}
+        
+        # Health Index calculation
+        metrics['health_index'] = self._calculate_health_index(data, params)
+        
+        # Coherence Score calculation
+        metrics['coherence_score'] = self._calculate_coherence(data, params)
+        
+        # Fork Tension calculation
+        metrics['fork_tension'] = self._calculate_fork_tension(data, params)
+        
+        return metrics
+    
+    def _calculate_health_index(self, 
+                              data: pd.DataFrame,
+                              params: MetricParameters) -> np.ndarray:
+        """Calculate health index with given parameters"""
+        
+        # Calculate components with parameter weights
+        volatility = self._calculate_volatility(data, params.lookback_window)
+        liquidity = self._calculate_liquidity(data, params.lookback_window)
+        sentiment = self._calculate_sentiment(data, params.lookback_window)
+        
+        # Combine with weights
+        health_index = (
+            params.volatility_weight * (1 - volatility) +
+            params.liquidity_weight * liquidity +
+            params.sentiment_weight * sentiment
+        )
+        
+        return health_index
+    
+    def _calculate_coherence(self, 
+                           data: pd.DataFrame,
+                           params: MetricParameters) -> np.ndarray:
+        """Calculate coherence score with noise filtering"""
+        
+        # Calculate price-volume correlation
+        rolling_corr = self._rolling_correlation(
+            data['close'],
+            data['volume'],
+            params.lookback_window
+        )
+        
+        # Apply noise threshold
+        coherence = np.where(
+            abs(rolling_corr) > params.noise_threshold,
+            rolling_corr,
+            0
+        )
+        
+        return np.abs(coherence)
+    
+    def _calculate_fork_tension(self, 
+                              data: pd.DataFrame,
+                              params: MetricParameters) -> np.ndarray:
+        """Calculate fork tension with trend sensitivity"""
+        
+        # Calculate trend components
+        price_trend = self._calculate_trend(
+            data['close'],
+            params.lookback_window,
+            params.trend_sensitivity
+        )
+        volume_trend = self._calculate_trend(
+            data['volume'],
+            params.lookback_window,
+            params.trend_sensitivity
+        )
+        
+        # Calculate tension as trend divergence
+        tension = np.abs(price_trend - volume_trend)
+        
+        return tension
+    
+    def _rolling_correlation(self, 
+                           x: np.ndarray,
+                           y: np.ndarray,
+                           window: int) -> np.ndarray:
+        """Calculate rolling correlation between two series"""
+        
+        # Convert to returns/changes
+        x_ret = np.diff(np.log(x))
+        y_ret = np.diff(np.log(y))
+        
+        # Calculate rolling correlation
+        corr = pd.Series(x_ret).rolling(window).corr(pd.Series(y_ret))
+        
+        return corr.fillna(0).values
+    
+    def _calculate_trend(self, 
+                        series: np.ndarray,
+                        window: int,
+                        sensitivity: float) -> np.ndarray:
+        """Calculate trend with adjustable sensitivity"""
+        
+        # Calculate log returns
+        returns = np.diff(np.log(series))
+        
+        # Apply sensitivity to trend calculation
+        trend = pd.Series(returns).rolling(window).mean() * sensitivity
+        
+        return trend.fillna(0).values
+    
+    def _evaluate_performance(self,
+                            train_metrics: Dict[str, np.ndarray],
+                            val_metrics: Dict[str, np.ndarray],
+                            train_target: np.ndarray,
+                            val_target: np.ndarray,
+                            metric: str) -> float:
+        """Evaluate metric performance"""
+        
+        if metric == 'predictive_power':
+            # Calculate predictive correlation
+            train_corr = np.corrcoef(train_metrics['health_index'], train_target)[0,1]
+            val_corr = np.corrcoef(val_metrics['health_index'], val_target)[0,1]
+            
+            # Weight validation more heavily
+            score = 0.4 * train_corr + 0.6 * val_corr
+            
+        elif metric == 'stability':
+            # Calculate metric stability
+            train_stability = 1 / np.std(train_metrics['health_index'])
+            val_stability = 1 / np.std(val_metrics['health_index'])
+            
+            score = min(train_stability, val_stability)
+            
+        elif metric == 'regime_detection':
+            # Calculate regime change detection accuracy
+            train_score = self._regime_detection_score(
+                train_metrics['fork_tension'],
+                train_target
+            )
+            val_score = self._regime_detection_score(
+                val_metrics['fork_tension'],
+                val_target
+            )
+            
+            score = 0.4 * train_score + 0.6 * val_score
+            
+        return float(score)
+    
+    def _regime_detection_score(self,
+                              tension: np.ndarray,
+                              target: np.ndarray) -> float:
+        """Calculate regime detection accuracy"""
+        
+        # Define regime changes as large moves in target
+        regime_changes = np.abs(np.diff(target)) > np.std(target) * 2
+        
+        # Check if high tension preceded regime changes
+        detection_rate = np.mean([
+            np.any(tension[max(0, i-5):i] > np.mean(tension) + np.std(tension))
+            for i in np.where(regime_changes)[0]
+        ])
+        
+        return float(detection_rate)
+        
+    def validate_parameters(self,
+                          params: MetricParameters,
+                          validation_data: pd.DataFrame) -> Dict[str, float]:
+        """Validate parameter set on out-of-sample data"""
+        
+        # Calculate metrics with parameters
+        metrics = self._calculate_metrics_with_params(validation_data, params)
+        
+        # Calculate validation statistics
+        validation_stats = {
+            'stability': 1 / np.std(metrics['health_index']),
+            'noise_ratio': np.mean(np.abs(np.diff(metrics['health_index']))),
+            'regime_detection': np.mean(metrics['fork_tension'] > params.coherence_threshold),
+            'metric_correlation': np.corrcoef(
+                metrics['health_index'],
+                metrics['coherence_score']
+            )[0,1]
+        }
+        
+        return validation_stats
+
+# Example usage
+def tune_market_metrics(market_data: pd.DataFrame) -> MetricParameters:
+    """Tune market metrics for optimal performance"""
+    
+    # Initialize with default parameters
+    initial_params = MetricParameters(
+        lookback_window=100,
+        volatility_weight=0.3,
+        liquidity_weight=0.3,
+        sentiment_weight=0.2,
+        coherence_threshold=0.6,
+        trend_sensitivity=1.0,
+        noise_threshold=0.2
+    )
+    
+    # Create optimizer
+    optimizer = MetricOptimizer(initial_params)
+    
+    # Optimize parameters
+    optimal_params = optimizer.optimize_parameters(
+        market_data,
+        target_variable='close',  # Or another target
+        optimization_metric='predictive_power'
+    )
+    
+    # Validate on recent data
+    validation_period = market_data.iloc[-252:]  # Last year
+    validation_stats = optimizer.validate_parameters(
+        optimal_params,
+        validation_period
+    )
+    
+    print("Validation Statistics:")
+    for metric, value in validation_stats.items():
+        print(f"{metric}: {value:.4f}")
+    
+    return optimal_params
