@@ -1,0 +1,251 @@
+# Using Neurocious for Technical Analysis
+
+## Overview
+
+Neurocious can transform technical analysis by detecting market patterns and signals that traditional TA misses. While conventional TA looks at price and volume patterns, Neurocious analyzes the underlying geometric structure of markets.
+
+## Key Signals
+
+### 1. Regime Detection Signals
+
+The `AdvancedRegimeDetector` identifies:
+- Current market regime (conviction-led, innovation-driven, stability-focused, mixed-belief)
+- Regime stability scores
+- Transition probabilities
+- Micro-regime interactions
+
+**Trading Application:**
+- Enter positions when regime stability is high
+- Exit or hedge when transition probabilities increase
+- Adjust position sizing based on regime certainty
+
+### 2. Topological Signals
+
+The `PhaseTransitionDetector` watches for:
+- Curvature spikes (rapid changes in market structure)
+- Dimensional shifts (market complexity changes)
+- Critical points (potential reversal points)
+- Bifurcations (where market behavior could diverge)
+
+**Trading Application:**
+- Use curvature spikes as early warning signals
+- Enter positions after dimensional shifts complete
+- Place stops near critical points
+- Split positions at bifurcation points
+
+### 3. Belief Rotation Signals
+
+The `BeliefRotationTrader` tracks:
+- Dominant market narratives
+- Belief momentum
+- Narrative shifts
+- Conviction strength
+
+**Trading Application:**
+- Trade belief rotation before price moves
+- Size positions based on conviction strength
+- Exit when belief momentum weakens
+- Hedge during narrative shifts
+
+### 4. Field Theory Signals
+
+The system's vector fields show:
+- Market force directions
+- Force strength
+- Field coherence
+- Field perturbations
+
+**Trading Application:**
+- Trade in direction of strong field forces
+- Reduce exposure when fields lose coherence
+- Watch for field perturbations as early warnings
+- Use field strength for position sizing
+
+## Practical Implementation
+
+### Setup Required Detectors
+
+```python
+# Initialize core components
+regime_detector = AdvancedRegimeDetector(
+    latent_dim=8,
+    sequence_length=20
+)
+
+phase_detector = PhaseTransitionDetector(
+    latent_dim=8,
+    num_attention_heads=4
+)
+
+belief_trader = BeliefRotationTrader(
+    analyzer=MetaMetricAnalyzer(),
+    window_size=100
+)
+```
+
+### Monitor Market State
+
+```python
+# Get current market state
+regime_state = regime_detector.detect_regime(
+    market_state=current_state,
+    metric_weights=weights
+)
+
+# Check for phase transitions
+topology = phase_detector.analyze_topology(latent_history)
+transition = phase_detector.detect_phase_transition(latent_sequence)
+
+# Monitor belief rotations
+current_regime = belief_trader.identify_current_regime()
+rotation_signal = belief_trader.predict_rotation()
+```
+
+### Generate Trading Signals
+
+```python
+# Combine signals across detectors
+def generate_trading_signals():
+    signals = []
+    
+    # Check regime stability
+    if regime_state.certainty > 0.8:
+        signals.append({
+            'type': 'regime',
+            'direction': 'long',
+            'confidence': regime_state.certainty
+        })
+    
+    # Check for phase transitions
+    if transition.critical_point < 0.2:
+        signals.append({
+            'type': 'topology',
+            'direction': 'short',
+            'confidence': 1 - transition.critical_point
+        })
+    
+    # Check belief rotation
+    if rotation_signal and rotation_signal.confidence > 0.7:
+        signals.append({
+            'type': 'belief',
+            'direction': rotation_signal.direction,
+            'confidence': rotation_signal.confidence
+        })
+        
+    return signals
+```
+
+### Position Management
+
+```python
+def manage_positions(signals):
+    for signal in signals:
+        # Size position based on signal confidence
+        size = calculate_position_size(
+            capital=available_capital,
+            confidence=signal.confidence,
+            risk_per_trade=0.02
+        )
+        
+        # Set stops based on topology
+        stops = calculate_stops(
+            signal_type=signal.type,
+            topology_state=current_topology,
+            position_size=size
+        )
+        
+        # Execute trade if conditions met
+        if validate_trade(signal, size, stops):
+            execute_trade(signal.direction, size, stops)
+```
+
+## Advanced Applications
+
+### 1. Multi-Timeframe Analysis
+
+The system can analyze market structure across timeframes:
+- Short-term regime shifts
+- Medium-term belief rotations
+- Long-term topological evolution
+
+### 2. Cross-Market Analysis
+
+Compare geometric structures across markets:
+- Regime correlations
+- Belief contagion
+- Topological relationships
+- Field interactions
+
+### 3. Risk Management
+
+Use geometric features for risk control:
+- Set stops at topological boundaries
+- Size positions based on regime certainty
+- Hedge at belief rotation points
+- Scale exposure with field coherence
+
+### 4. Portfolio Management
+
+Apply system insights to portfolio construction:
+- Allocate across regimes
+- Balance belief exposures
+- Diversify across topological features
+- Optimize using field theories
+
+## Best Practices
+
+1. **Signal Integration**
+   - Combine signals across detectors
+   - Weight signals by confidence
+   - Consider timeframe alignment
+   - Watch for contradictions
+
+2. **Risk Control**
+   - Never ignore topology warnings
+   - Reduce size in uncertain regimes
+   - Hedge during belief rotations
+   - Keep stops at geometric boundaries
+
+3. **System Calibration**
+   - Start with conservative settings
+   - Backtest across different regimes
+   - Monitor prediction accuracy
+   - Adjust parameters gradually
+
+4. **Performance Monitoring**
+   - Track signal accuracy
+   - Measure regime prediction success
+   - Monitor topology detection
+   - Evaluate belief rotation timing
+
+## Warning Signs to Watch
+
+1. **Regime Warnings**
+   - Falling regime certainty
+   - Rising transition probabilities
+   - Micro-regime instability
+   - Conviction volatility
+
+2. **Topology Warnings**
+   - Rapid curvature changes
+   - Unstable manifold dimension
+   - Multiple critical points
+   - Complex bifurcations
+
+3. **Belief Warnings**
+   - Weakening conviction
+   - Contradictory narratives
+   - Rapid belief rotation
+   - Low consensus strength
+
+4. **Field Warnings**
+   - Field incoherence
+   - Strong perturbations
+   - Field alignment breaks
+   - Force direction shifts
+
+## Conclusion
+
+Neurocious provides a sophisticated framework for technical analysis that goes beyond traditional indicators. By understanding market geometry, regimes, and beliefs, traders can potentially identify opportunities and risks before they become apparent in conventional technical analysis.
+
+The key is to integrate these advanced signals while maintaining strict risk management and system monitoring. Success requires understanding both the mathematical foundations and practical applications of the system.
