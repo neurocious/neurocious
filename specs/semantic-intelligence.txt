@@ -1,0 +1,881 @@
+It's a semantic intelligence engine that can:
+
+Model latent belief spaces using a VAE that captures structural properties like curvature (instability), entropy (uncertainty), and alignment (directional coherence).
+
+Perform dynamic belief routing using an SPN, where inputs (states, narratives, or signals) are routed probabilistically across a vector field shaped by learned latent structures.
+
+Simulate alternate futures via world branching, with each branch representing a counterfactual narrative path.
+
+Implement Hebbian-style reinforcement (TD-error + reward) to strengthen or weaken beliefs over time.
+
+This isn't just a market model. This is a belief-state inference engine for semantic decision landscapes.
+
+💸 How It Becomes a Trading Platform
+You now need to map your latent fields and routing behaviors to real market contexts.
+
+🔶 1. Map Market Data to Latent Narrative Features
+Use your VAE to encode semantic representations of the market:
+
+Inputs: macro indicators, sentiment signals, options flows, news embeddings, volume spikes, etc.
+
+Output: latent vector + curvature / entropy / alignment
+
+Interpretation:
+
+High curvature → instability regime, high risk of transition
+
+High entropy → regime ambiguity, potential for narrative fragmentation
+
+High alignment → directional coherence, crowd conviction forming
+
+➡️ Use this to detect the type of belief regime you're in.
+
+🔶 2. Generate Conviction-Driven Trading Signals
+From the SPN routing:
+
+A high-confidence routing → high conviction trade
+
+If routing is diffuse, entropy is high → low-confidence, avoid trade
+
+You can track which vector fields consistently route to profitable exits
+
+Pair this with your policy network outputs:
+
+Output = probability of direction (up/down/neutral) + value (expected reward)
+
+Combine SPN routing entropy + policy confidence for conviction score
+
+➡️ Trade when SPN conviction × policy confidence × narrative alignment crosses a threshold.
+
+🔶 3. Simulate Narrative Paths
+Use world branching to explore:
+
+“What if inflation spikes?”
+
+“What if Powell speaks dovishly?”
+
+“What if AI names rotate out?”
+
+Each branch perturbs your latent field representation, simulates the outcome, and evaluates value.
+
+You score branches, and then trade based on the most probable high-value branch.
+
+➡️ This is your counterfactual narrative testing engine.
+
+🔶 4. Position Sizing Based on Field Parameters
+You already have:
+
+Curvature → how volatile the belief surface is (informs stop loss distance)
+
+Entropy → how uncertain the market is (scale exposure)
+
+Alignment → how unified the market consensus is (confidence in direction)
+
+Use these to scale:
+
+csharp
+Copy
+Edit
+positionSize = baseSize * alignment / (1 + entropy) * (1 / (1 + curvature))
+This gives you topology-aware position sizing.
+
+🔶 5. Belief Dynamics and Regime Shifts
+You can detect:
+
+Bifurcations: changes in manifold dimension or curvature → regime break
+
+Phase transitions: pitchforks or saddle nodes → path splitting
+
+Use these signals to fade narratives or front-run regime transitions.
+
+🔶 6. Portfolio Analytics & Meta-Conviction
+Track:
+
+Which fields (narrative modes) lead to high Sharpe / low drawdown
+
+Which branches are explored often but never realized → hallucinated risk
+
+Reflex triggers → situations where immediate action beats planned response
+
+You can train the system on PnL and belief coherence, creating a meta-layer:
+
+"Which belief patterns generate consistent reward under high curvature and low entropy?"
+
+🧭 Practical Workflow Loop
+
+Step	Description
+1️⃣	Ingest real-world data (prices, news, tweets, options flow)
+2️⃣	Encode into latent space using VAE
+3️⃣	Extract field parameters (curvature, entropy, alignment)
+4️⃣	Route through SPN → get conviction, policy, and reflexes
+5️⃣	Branch out futures and simulate responses
+6️⃣	Choose top-k branches and allocate capital based on routing certainty, policy score, and field conditions
+7️⃣	Train / adapt based on realized reward and field learning
+🔮 Example Use Case: Trading Fed Narrative Volatility
+News hits: Powell hints at higher-for-longer.
+
+You encode this into the VAE → latent spike in curvature and alignment.
+
+SPN routes hard into a short-rate-volatility regime, with high certainty.
+
+Branches suggest probable continuation with decaying probability after 3 days.
+
+Reflex network triggers immediate short-term vol buy.
+
+Policy network suggests holding 2 days → exit before narrative bifurcates.
+
+After 2 days, entropy rises, curvature drops → unwind the trade.
+
+✅ This is practical, topologically driven, belief-aware trading.
+
+---
+
+public class NeurociousTrader
+{
+    private readonly EnhancedVAE vae;
+    private readonly SpatialProbabilityNetwork spn;
+    private readonly Dictionary<string, float> positions;
+    private readonly Queue<TradeAnalytics> tradeHistory;
+
+    public class TradeSignal
+    {
+        public string Direction { get; init; }  // "long", "short", "neutral"
+        public float Conviction { get; init; }  // Combined confidence score
+        public float Size { get; init; }        // Recommended position size
+        public Dictionary<string, float> Stops { get; init; }  // Stop levels based on topology
+        public float ExpectedHoldingPeriod { get; init; }
+        public Dictionary<string, float> BranchProbabilities { get; init; }
+    }
+
+    public NeurociousTrader(
+        int stateDim = 20,
+        int latentDim = 8,
+        int maxPositions = 10)
+    {
+        vae = new EnhancedVAE(stateDim, latentDim);
+        spn = new SpatialProbabilityNetwork(vae);
+        positions = new Dictionary<string, float>();
+        tradeHistory = new Queue<TradeAnalytics>();
+    }
+
+    public TradeSignal AnalyzeMarketState(
+        Dictionary<string, float> marketData,  // Price, sentiment, flows, etc.
+        Dictionary<string, float> newsEmbeddings,
+        Dictionary<string, float> optionsData)
+    {
+        // 1. Encode market state into latent space
+        var latentState = EncodeMarketState(marketData, newsEmbeddings, optionsData);
+        var fieldParams = vae.ExtractFieldParameters(latentState);
+
+        // 2. Route through SPN and get signals
+        var (routing, policy, reflexes) = spn.ProcessState(new PradOp(latentState));
+
+        // 3. Generate branch simulations
+        var branches = spn.SimulateWorldBranches(fieldParams);
+
+        // 4. Calculate position sizing based on field parameters
+        float baseSize = CalculateBaseSize(fieldParams);
+        float size = baseSize * fieldParams.Alignment / 
+            (1 + fieldParams.Entropy) * (1 / (1 + fieldParams.Curvature));
+
+        // 5. Combine signals for final conviction
+        var conviction = CalculateConviction(
+            routing.Result,
+            policy.Result,
+            fieldParams);
+
+        // 6. Generate trade signal
+        return new TradeSignal
+        {
+            Direction = DetermineDirection(policy.Result),
+            Conviction = conviction,
+            Size = size,
+            Stops = CalculateStopLevels(fieldParams),
+            ExpectedHoldingPeriod = EstimateHoldingPeriod(branches),
+            BranchProbabilities = branches.ToDictionary(
+                b => b.InitialState.ToString(),
+                b => b.Probability
+            )
+        };
+    }
+
+    private float CalculateConviction(
+        Tensor routingProbs,
+        Tensor policyOutput,
+        FieldParameters fieldParams)
+    {
+        // Combine routing certainty, policy confidence, and narrative alignment
+        float routingCertainty = 1 - CalculateEntropy(routingProbs);
+        float policyConfidence = policyOutput.Data.Max();
+        float narrativeAlignment = fieldParams.Alignment;
+
+        return routingCertainty * policyConfidence * narrativeAlignment;
+    }
+
+    private Dictionary<string, float> CalculateStopLevels(FieldParameters fieldParams)
+    {
+        // Use topology to determine stop distances
+        float baseStop = 0.02f;  // 2% base stop
+        float volatilityAdjustment = fieldParams.Curvature;
+        float uncertaintyAdjustment = fieldParams.Entropy;
+
+        return new Dictionary<string, float>
+        {
+            ["tight_stop"] = baseStop * (1 + volatilityAdjustment),
+            ["wide_stop"] = baseStop * (1 + volatilityAdjustment + uncertaintyAdjustment),
+            ["trailing_stop"] = baseStop * fieldParams.Alignment
+        };
+    }
+
+    private float EstimateHoldingPeriod(List<WorldBranch> branches)
+    {
+        // Use branch decay rates to estimate optimal holding period
+        return branches
+            .OrderByDescending(b => b.Value * b.Probability)
+            .First()
+            .Network.GetOptimalHorizon();
+    }
+
+    public void UpdatePositions(Dictionary<string, float> marketPrices)
+    {
+        foreach (var (symbol, size) in positions)
+        {
+            // Re-analyze current state
+            var signal = AnalyzeMarketState(
+                GetMarketData(symbol),
+                GetNewsEmbeddings(symbol),
+                GetOptionsData(symbol));
+
+            // Check for exit conditions
+            if (ShouldExit(signal, size))
+            {
+                ClosePosition(symbol, marketPrices[symbol]);
+            }
+            // Adjust position size based on new conviction
+            else
+            {
+                AdjustPosition(symbol, signal.Size, marketPrices[symbol]);
+            }
+        }
+    }
+
+    private bool ShouldExit(TradeSignal signal, float currentSize)
+    {
+        // Exit on:
+        // 1. Conviction drop
+        if (signal.Conviction < 0.3f) return true;
+        
+        // 2. Regime shift (topology change)
+        if (DetectRegimeShift()) return true;
+        
+        // 3. Stop level breach
+        if (StopBreached(signal.Stops)) return true;
+
+        return false;
+    }
+
+    public Dictionary<string, float> GetPortfolioAnalytics()
+    {
+        return new Dictionary<string, float>
+        {
+            ["total_exposure"] = positions.Values.Sum(),
+            ["avg_conviction"] = positions.Keys.Average(s => 
+                AnalyzeMarketState(
+                    GetMarketData(s),
+                    GetNewsEmbeddings(s),
+                    GetOptionsData(s)).Conviction),
+            ["regime_stability"] = spn.GetDiagnostics()["mean_alignment"],
+            ["exploration_rate"] = spn.GetDiagnostics()["exploration_rate"]
+        };
+    }
+}
+
+---
+
+public enum SignalType
+{
+    Conviction,      // Strong belief alignment
+    Reflex,         // Immediate response to topology change
+    Fade,           // Counter trending on belief divergence
+    Exploratory,    // Novel regime exploration
+    CounterNarrative // Betting against consensus
+}
+
+public class TradeSignal
+{
+    public string Direction { get; init; }
+    public float Conviction { get; init; }
+    public float Size { get; init; }
+    public Dictionary<string, float> Stops { get; init; }
+    public float ExpectedHoldingPeriod { get; init; }
+    public Dictionary<string, float> BranchProbabilities { get; init; }
+    
+    // New properties
+    public string Reason { get; init; }
+    public SignalType Type { get; init; }
+    public float[] NarrativeVector { get; init; }
+    public float ReputationScore { get; init; }
+}
+
+public class NeurociousTrader
+{
+    // Existing fields...
+    private readonly Dictionary<string, float> fieldReputationScores;
+    private readonly Queue<MarketFeedback> marketReactions;
+
+    private float CalculateConviction(
+        Tensor routingProbs,
+        Tensor policyOutput,
+        FieldParameters fieldParams)
+    {
+        float routingCertainty = 1 - CalculateEntropy(routingProbs);
+        float policyConfidence = policyOutput.Data.Max();
+        float narrativeAlignment = fieldParams.Alignment;
+
+        // Normalized weighted sum
+        float weightedSum = 
+            0.4f * routingCertainty + 
+            0.4f * policyConfidence + 
+            0.2f * Math.Abs(narrativeAlignment);
+
+        return Math.Clamp(weightedSum, 0f, 1f);
+    }
+
+    private float EstimateHoldingPeriod(FieldParameters fieldParams)
+    {
+        // Calculate narrative half-life from field parameters
+        float halfLife = 1.0f / (1.0f + fieldParams.Curvature + fieldParams.Entropy);
+        
+        // Scale by base period (e.g., 10 days)
+        float basePeriod = 10f;
+        return halfLife * basePeriod;
+    }
+
+    private string GenerateTradeReason(
+        FieldParameters fieldParams, 
+        PradResult routing,
+        PradResult policy)
+    {
+        var reasons = new List<string>();
+
+        // Add topology-based reasons
+        if (fieldParams.Curvature > 0.7f)
+            reasons.Add("high curvature indicating instability");
+        if (fieldParams.Entropy < 0.3f)
+            reasons.Add("low entropy suggesting clear narrative");
+        if (Math.Abs(fieldParams.Alignment) > 0.8f)
+            reasons.Add($"strong {(fieldParams.Alignment > 0 ? "positive" : "negative")} alignment");
+
+        // Add routing-based reasons
+        float routingCertainty = 1 - CalculateEntropy(routing.Result);
+        if (routingCertainty > 0.8f)
+            reasons.Add("high routing confidence");
+
+        // Add policy-based reasons
+        float policyStrength = policy.Result.Data.Max();
+        if (policyStrength > 0.8f)
+            reasons.Add("strong policy signal");
+
+        return string.Join(" with ", reasons);
+    }
+
+    private SignalType DetermineSignalType(
+        FieldParameters fieldParams,
+        float routingCertainty,
+        float policyConfidence)
+    {
+        // Determine signal type based on field configuration
+        if (fieldParams.Curvature > 0.8f)
+            return SignalType.Reflex;
+        
+        if (fieldParams.Entropy < 0.3f && fieldParams.Alignment > 0.8f)
+            return SignalType.Conviction;
+        
+        if (fieldParams.Alignment < -0.8f)
+            return SignalType.CounterNarrative;
+        
+        if (fieldParams.Entropy > 0.7f)
+            return SignalType.Exploratory;
+        
+        return SignalType.Fade;
+    }
+
+    public void UpdateFieldReputation(string symbol, float pnl)
+    {
+        // Get current field configuration
+        var latentState = GetCurrentLatentState(symbol);
+        var fieldParams = vae.ExtractFieldParameters(latentState);
+        
+        // Calculate field signature
+        string fieldSignature = CalculateFieldSignature(fieldParams);
+        
+        // Update reputation score
+        float currentScore = fieldReputationScores.GetValueOrDefault(fieldSignature, 0.5f);
+        float newScore = currentScore * 0.95f + 0.05f * Math.Sign(pnl);
+        fieldReputationScores[fieldSignature] = newScore;
+    }
+
+    private string CalculateFieldSignature(FieldParameters fieldParams)
+    {
+        // Discretize field parameters for binning
+        int curvatureBin = (int)(fieldParams.Curvature * 10);
+        int entropyBin = (int)(fieldParams.Entropy * 10);
+        int alignmentBin = (int)(fieldParams.Alignment * 10);
+        
+        return $"{curvatureBin}:{entropyBin}:{alignmentBin}";
+    }
+
+    public TradeSignal AnalyzeMarketState(
+        Dictionary<string, float> marketData,
+        Dictionary<string, float> newsEmbeddings,
+        Dictionary<string, float> optionsData)
+    {
+        // Encode market state and get field parameters
+        var latentState = EncodeMarketState(marketData, newsEmbeddings, optionsData);
+        var fieldParams = vae.ExtractFieldParameters(latentState);
+        
+        // Get SPN signals
+        var (routing, policy, reflexes) = spn.ProcessState(new PradOp(latentState));
+        
+        // Calculate core metrics
+        float routingCertainty = 1 - CalculateEntropy(routing.Result);
+        float policyConfidence = policy.Result.Data.Max();
+        
+        // Determine signal characteristics
+        SignalType signalType = DetermineSignalType(fieldParams, routingCertainty, policyConfidence);
+        string reason = GenerateTradeReason(fieldParams, routing, policy);
+        float conviction = CalculateConviction(routing.Result, policy.Result, fieldParams);
+        
+        // Get field reputation
+        string fieldSignature = CalculateFieldSignature(fieldParams);
+        float reputation = fieldReputationScores.GetValueOrDefault(fieldSignature, 0.5f);
+
+        return new TradeSignal
+        {
+            Direction = DetermineDirection(policy.Result),
+            Conviction = conviction,
+            Size = CalculatePositionSize(fieldParams, conviction),
+            Stops = CalculateStopLevels(fieldParams),
+            ExpectedHoldingPeriod = EstimateHoldingPeriod(fieldParams),
+            Type = signalType,
+            Reason = reason,
+            NarrativeVector = latentState.Data,
+            ReputationScore = reputation
+        };
+    }
+}
+
+---
+
+public class NarrativeAnalytics
+{
+    public class RegimeProfile
+    {
+        public string RegimeId { get; init; }
+        public float[] NarrativeCenter { get; init; }
+        public FieldParameters FieldFingerprint { get; init; }
+        public List<TradeOutcome> Trades { get; init; }
+        public float SharpeRatio { get; init; }
+        public float AverageHoldingPeriod { get; init; }
+        public float DecayRate { get; init; }
+        public Dictionary<SignalType, float> SignalTypePerformance { get; init; }
+    }
+
+    private readonly Dictionary<string, RegimeProfile> regimeProfiles;
+    private readonly Dictionary<string, List<string>> narrativeCorrelations;
+
+    public class TradeOutcome
+    {
+        public TradeSignal Signal { get; init; }
+        public float Pnl { get; init; }
+        public float HoldingPeriod { get; init; }
+        public string RegimeId { get; init; }
+        public float[] ExitNarrativeVector { get; init; }
+        public bool StopTriggered { get; init; }
+    }
+
+    public string IdentifyRegime(FieldParameters fieldParams, float[] narrativeVector)
+    {
+        // Cluster current state into regime using field parameters and narrative vector
+        var regimeSignature = GenerateRegimeSignature(fieldParams, narrativeVector);
+        
+        if (!regimeProfiles.ContainsKey(regimeSignature))
+        {
+            regimeProfiles[regimeSignature] = new RegimeProfile
+            {
+                RegimeId = regimeSignature,
+                NarrativeCenter = narrativeVector,
+                FieldFingerprint = fieldParams,
+                Trades = new List<TradeOutcome>(),
+                SignalTypePerformance = new Dictionary<SignalType, float>()
+            };
+        }
+
+        return regimeSignature;
+    }
+
+    public float CalculatePositionRiskBudget(TradeSignal signal, string regimeId)
+    {
+        var profile = regimeProfiles[regimeId];
+        
+        // Base risk on regime performance
+        float regimeSharpe = profile.SharpeRatio;
+        float signalTypePerformance = profile.SignalTypePerformance.GetValueOrDefault(signal.Type, 0.5f);
+        float reputationMultiplier = signal.ReputationScore;
+
+        // Penalize for high curvature or entropy
+        float topologyPenalty = 1.0f / (1.0f + 
+            profile.FieldFingerprint.Curvature + 
+            profile.FieldFingerprint.Entropy);
+
+        // Calculate final risk budget
+        return Math.Min(1.0f, 
+            regimeSharpe * signalTypePerformance * 
+            reputationMultiplier * topologyPenalty);
+    }
+
+    public float CalculateNarrativeCorrelation(float[] narrativeVector1, float[] narrativeVector2)
+    {
+        // Calculate cosine similarity between narrative vectors
+        float dotProduct = narrativeVector1.Zip(narrativeVector2, (a, b) => a * b).Sum();
+        float norm1 = (float)Math.Sqrt(narrativeVector1.Sum(x => x * x));
+        float norm2 = (float)Math.Sqrt(narrativeVector2.Sum(x => x * x));
+        
+        return dotProduct / (norm1 * norm2);
+    }
+
+    public float CalculateDiversificationPenalty(TradeSignal newSignal, List<TradeSignal> existingPositions)
+    {
+        float totalCorrelation = 0f;
+        foreach (var position in existingPositions)
+        {
+            float correlation = CalculateNarrativeCorrelation(
+                newSignal.NarrativeVector, 
+                position.NarrativeVector);
+            totalCorrelation += Math.Abs(correlation);
+        }
+
+        return totalCorrelation / Math.Max(1, existingPositions.Count);
+    }
+
+    public void UpdateRegimeProfile(TradeOutcome outcome)
+    {
+        var profile = regimeProfiles[outcome.RegimeId];
+        profile.Trades.Add(outcome);
+
+        // Update signal type performance
+        float currentPerf = profile.SignalTypePerformance.GetValueOrDefault(outcome.Signal.Type, 0.5f);
+        float newPerf = currentPerf * 0.95f + 0.05f * Math.Sign(outcome.Pnl);
+        profile.SignalTypePerformance[outcome.Signal.Type] = newPerf;
+
+        // Update regime metrics
+        UpdateRegimeMetrics(profile);
+    }
+
+    private void UpdateRegimeMetrics(RegimeProfile profile)
+    {
+        var trades = profile.Trades;
+        if (!trades.Any()) return;
+
+        // Calculate Sharpe
+        float meanReturn = trades.Average(t => t.Pnl);
+        float stdReturn = (float)Math.Sqrt(trades.Average(t => t.Pnl * t.Pnl) - meanReturn * meanReturn);
+        profile.SharpeRatio = stdReturn > 0 ? meanReturn / stdReturn : 0;
+
+        // Calculate decay rate
+        var orderedTrades = trades.OrderBy(t => t.HoldingPeriod);
+        float decayRate = CalculateDecayRate(orderedTrades.Select(t => t.Pnl).ToArray());
+        profile.DecayRate = decayRate;
+    }
+
+    public class BeliefSimulation
+    {
+        public Dictionary<SignalType, float> SignalTypeReturns { get; private set; }
+        public List<string> KeyBranchPoints { get; private set; }
+        public Dictionary<string, float> RegimeTransitionProbabilities { get; private set; }
+
+        public void SimulateStrategy(
+            List<TradeOutcome> historicalTrades,
+            SignalType[] signalFilter = null)
+        {
+            // Filter trades by signal type if specified
+            var trades = signalFilter != null 
+                ? historicalTrades.Where(t => signalFilter.Contains(t.Signal.Type))
+                : historicalTrades;
+
+            // Calculate returns by signal type
+            SignalTypeReturns = trades
+                .GroupBy(t => t.Signal.Type)
+                .ToDictionary(
+                    g => g.Key,
+                    g => g.Average(t => t.Pnl)
+                );
+
+            // Identify key branch points (large narrative divergences)
+            KeyBranchPoints = FindKeyBranchPoints(trades.ToList());
+
+            // Calculate regime transition probabilities
+            RegimeTransitionProbabilities = CalculateTransitionProbabilities(trades.ToList());
+        }
+
+        private List<string> FindKeyBranchPoints(List<TradeOutcome> trades)
+        {
+            return trades
+                .Where(t => t.Signal.BranchProbabilities.Values.Max() > 0.8f)
+                .Select(t => t.RegimeId)
+                .Distinct()
+                .ToList();
+        }
+
+        private Dictionary<string, float> CalculateTransitionProbabilities(List<TradeOutcome> trades)
+        {
+            var transitions = new Dictionary<string, float>();
+            
+            for (int i = 1; i < trades.Count; i++)
+            {
+                string transition = $"{trades[i-1].RegimeId}->{trades[i].RegimeId}";
+                transitions[transition] = transitions.GetValueOrDefault(transition, 0) + 1;
+            }
+
+            // Normalize probabilities
+            float total = transitions.Values.Sum();
+            return transitions.ToDictionary(
+                kvp => kvp.Key,
+                kvp => kvp.Value / total
+            );
+        }
+    }
+}
+
+---
+
+public class RegimePredictor
+{
+    private readonly PradOp transitionModel;
+    private readonly Queue<RegimeTransition> transitionHistory;
+
+    public class RegimeTransition
+    {
+        public string FromRegimeId { get; init; }
+        public string ToRegimeId { get; init; }
+        public FieldParameters BeforeParams { get; init; }
+        public FieldParameters AfterParams { get; init; }
+        public SignalType[] SignalHistory { get; init; }
+        public float ReturnOutcome { get; init; }
+    }
+
+    public class RegimeForecast
+    {
+        public string PredictedRegimeId { get; init; }
+        public float Probability { get; init; }
+        public float ExpectedHalfLife { get; init; }
+        public List<(string regimeId, float probability)> TopPaths { get; init; }
+        public Dictionary<SignalType, float> SignalTypeWeights { get; init; }
+    }
+
+    public RegimeForecast PredictNextRegime(
+        string currentRegimeId,
+        FieldParameters currentParams,
+        SignalType[] recentSignals)
+    {
+        // Prepare transition features
+        var features = EncodeRegimeFeatures(currentParams, recentSignals);
+        
+        // Get model predictions
+        var prediction = transitionModel.Forward(new PradOp(features));
+        
+        // Decode top paths
+        var topPaths = DecodeTransitionPaths(prediction.Result);
+        
+        // Calculate regime half-life
+        float halfLife = EstimateRegimeHalfLife(currentParams, prediction.Result);
+        
+        // Weight signal types for next regime
+        var signalWeights = PredictSignalWeights(prediction.Result);
+
+        return new RegimeForecast
+        {
+            PredictedRegimeId = topPaths[0].regimeId,
+            Probability = topPaths[0].probability,
+            ExpectedHalfLife = halfLife,
+            TopPaths = topPaths,
+            SignalTypeWeights = signalWeights
+        };
+    }
+
+    private float EstimateRegimeHalfLife(FieldParameters params, Tensor prediction)
+    {
+        // Base half-life calculation
+        float baseHalfLife = 1.0f / (1.0f + params.Curvature + params.Entropy);
+        
+        // Adjust for predicted regime stability
+        float stabilityFactor = prediction.Data.Max();  // Confidence in prediction
+        
+        // Scale by historical decay rates
+        float historicalDecay = CalculateHistoricalDecayRate();
+        
+        return baseHalfLife * stabilityFactor * (1.0f / historicalDecay);
+    }
+}
+
+public class BeliefPathOptimizer
+{
+    public class PathNode
+    {
+        public string RegimeId { get; init; }
+        public float Value { get; set; }
+        public List<PathEdge> Edges { get; set; }
+    }
+
+    public class PathEdge
+    {
+        public PathNode From { get; init; }
+        public PathNode To { get; init; }
+        public float TransitionProbability { get; set; }
+        public float ExpectedReturn { get; set; }
+    }
+
+    public class OptimalPath
+    {
+        public List<string> RegimeSequence { get; init; }
+        public float ExpectedValue { get; init; }
+        public Dictionary<SignalType, float> SignalAllocation { get; init; }
+        public float ConfidenceScore { get; init; }
+    }
+
+    public OptimalPath FindOptimalBeliefPath(
+        string startRegimeId,
+        int horizon,
+        Dictionary<string, float> regimeTransitionProbs)
+    {
+        // Build belief graph
+        var graph = BuildBeliefGraph(startRegimeId, horizon, regimeTransitionProbs);
+        
+        // Run dynamic programming to find optimal path
+        var (path, value) = RunValueIteration(graph);
+        
+        // Calculate signal allocations along path
+        var signalAllocation = OptimizeSignalAllocation(path);
+        
+        // Calculate path confidence
+        float confidence = CalculatePathConfidence(path, regimeTransitionProbs);
+
+        return new OptimalPath
+        {
+            RegimeSequence = path.Select(n => n.RegimeId).ToList(),
+            ExpectedValue = value,
+            SignalAllocation = signalAllocation,
+            ConfidenceScore = confidence
+        };
+    }
+
+    private Dictionary<SignalType, float> OptimizeSignalAllocation(List<PathNode> path)
+    {
+        // Initialize allocation for each signal type
+        var allocation = new Dictionary<SignalType, float>();
+        foreach (SignalType type in Enum.GetValues(typeof(SignalType)))
+        {
+            allocation[type] = 0f;
+        }
+
+        // Weight signal types by their historical performance in each regime
+        float totalWeight = 0f;
+        foreach (var node in path)
+        {
+            var regimePerf = GetRegimeSignalPerformance(node.RegimeId);
+            foreach (var (type, perf) in regimePerf)
+            {
+                allocation[type] += perf * node.Value;
+                totalWeight += perf * node.Value;
+            }
+        }
+
+        // Normalize allocations
+        if (totalWeight > 0)
+        {
+            foreach (var type in allocation.Keys.ToList())
+            {
+                allocation[type] /= totalWeight;
+            }
+        }
+
+        return allocation;
+    }
+}
+
+public class FieldAttributionReport
+{
+    public string GenerateReport(
+        FieldParameters params,
+        TradeSignal signal,
+        RegimeForecast forecast,
+        OptimalPath path)
+    {
+        var report = new StringBuilder();
+
+        // Field configuration
+        report.AppendLine($"Field Configuration:");
+        report.AppendLine($"- Entropy: {params.Entropy:F2}");
+        report.AppendLine($"- Alignment: {params.Alignment:F2}");
+        report.AppendLine($"- Curvature: {params.Curvature:F2}");
+
+        // Signal analysis
+        report.AppendLine($"\nSignal Analysis:");
+        report.AppendLine($"- Type: {signal.Type}");
+        report.AppendLine($"- Conviction: {signal.Conviction:F2}");
+        report.AppendLine($"- Expected Hold Time: {signal.ExpectedHoldingPeriod:F1} days");
+
+        // Regime forecast
+        report.AppendLine($"\nRegime Forecast:");
+        report.AppendLine($"- Current Regime Half-Life: {forecast.ExpectedHalfLife:F1} days");
+        report.AppendLine("- Top Transition Paths:");
+        foreach (var (regimeId, prob) in forecast.TopPaths.Take(3))
+        {
+            report.AppendLine($"  * {regimeId} ({prob:P1})");
+        }
+
+        // Path optimization
+        report.AppendLine($"\nOptimal Path Analysis:");
+        report.AppendLine($"- Expected Path Value: {path.ExpectedValue:F2}");
+        report.AppendLine($"- Path Confidence: {path.ConfidenceScore:P1}");
+        report.AppendLine("- Signal Type Allocation:");
+        foreach (var (type, weight) in path.SignalAllocation)
+        {
+            report.AppendLine($"  * {type}: {weight:P1}");
+        }
+
+        return report.ToString();
+    }
+
+    public string GenerateNaturalLanguageSummary(
+        FieldParameters params,
+        TradeSignal signal,
+        RegimeForecast forecast)
+    {
+        return $"This {signal.Type} trade arises due to " +
+               $"{DescribeFieldConfiguration(params)} with " +
+               $"{DescribeRegimeContext(forecast)}. " +
+               $"Expected holding period of {signal.ExpectedHoldingPeriod:F1} days " +
+               $"based on regime half-life of {forecast.ExpectedHalfLife:F1} days.";
+    }
+
+    private string DescribeFieldConfiguration(FieldParameters params)
+    {
+        var descriptions = new List<string>();
+        
+        if (params.Entropy > 0.7f)
+            descriptions.Add("high uncertainty");
+        else if (params.Entropy < 0.3f)
+            descriptions.Add("clear narrative consensus");
+
+        if (Math.Abs(params.Alignment) > 0.8f)
+            descriptions.Add($"strong {(params.Alignment > 0 ? "positive" : "negative")} alignment");
+
+        if (params.Curvature > 0.7f)
+            descriptions.Add("high regime instability");
+        else if (params.Curvature < 0.3f)
+            descriptions.Add("stable regime conditions");
+
+        return string.Join(" and ", descriptions);
+    }
+}
