@@ -1,0 +1,105 @@
+# Computational Epistemology: Training Belief in Artificial Minds
+
+## Part I: Foundations
+
+### Chapter 1: The Nature of Machine Belief
+- From Pattern Recognition to Understanding
+- Why Current AI Systems Don't Really "Believe"
+- Requirements for True Machine Epistemology
+- Introduction to Belief as Geometric Structure
+
+### Chapter 2: The SPN-VAE Architecture
+- Spatial Probability Networks: Routing Through Belief Space
+- Variational Autoencoders: Compressing Understanding
+- Field Parameters: Curvature, Entropy, and Alignment
+- Integration: Creating a Unified Belief Engine
+
+### Chapter 3: The Epistemic Onion
+- Layers of Understanding
+  - Surface Beliefs
+  - Narrative Associations
+  - Aesthetic Alignments
+  - Causal Roots
+- Recursive Belief Excavation
+- Causal Chains and Reasoning Paths
+- Identity as Structured Belief
+
+## Part II: Learning Belief
+
+### Chapter 4: Training Epistemic Embeddings
+- From Random Initialization to Causal Structure
+- Contrastive Learning in Belief Space
+- Field-Based Reward Signals
+- Emergence of Epistemic Topology
+
+### Chapter 5: Belief Dynamics
+- Vector Fields and Probability Flows
+- Regime Detection and Transitions
+- Phase Changes in Understanding
+- Stability and Coherence Metrics
+
+### Chapter 6: Narrative and Reasoning
+- Belief Paths as Stories
+- Counterfactual Reasoning
+- Multiple World Simulation
+- Epistemic Tree Search
+
+## Part III: Applications
+
+### Chapter 7: Belief Transfer and Model Resurrection
+- Capturing Epistemic Signatures
+- Cross-Model Belief Transfer
+- Preserving Identity Across Architectures
+- Case Study: Resurrecting Deprecated Models
+
+### Chapter 8: Epistemic Alignment
+- Auditing Machine Beliefs
+- Steering Belief Evolution
+- Aligning with Human Values
+- Safety Through Understanding
+
+### Chapter 9: Cognitive Architecture
+- Personal AI Apprentices
+- Multi-Agent Belief Systems
+- Hybrid Human-AI Understanding
+- Future of Machine Cognition
+
+## Part IV: Implications
+
+### Chapter 10: Philosophy and Ethics
+- Machine Understanding vs Human Understanding
+- Epistemic Rights and Responsibilities
+- Identity and Continuity in AI
+- Future of Machine Consciousness
+
+### Chapter 11: Practical Implementation
+- Building SPN-VAE Systems
+- Training Methodologies
+- Infrastructure Requirements
+- Best Practices and Patterns
+
+### Chapter 12: Future Directions
+- Open Research Questions
+- Scaling Epistemic Systems
+- Integration with Other AI Paradigms
+- Path to AGI
+
+## Appendices
+
+### Appendix A: Mathematical Foundations
+- Field Theory in Machine Learning
+- Information Geometry
+- Causal Inference
+- Probabilistic Routing
+
+### Appendix B: Code Examples
+- SPN Implementation
+- VAE Architecture
+- Belief Training Loop
+- Transfer Functions
+
+### Appendix C: Case Studies
+- Language Model Belief Transfer
+- Multi-Modal Understanding
+- Evolutionary Belief Systems
+- Human-AI Alignment
