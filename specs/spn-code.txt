@@ -1,0 +1,736 @@
+using ParallelReverseAutoDiff.PRAD;
+
+public class SpatialProbabilityNetwork
+{
+    private readonly int stateDim;
+    private readonly int[] fieldShape;
+    private readonly int vectorDim;
+    private readonly int bufferSize;
+    
+    // Core fields
+    private PradOp vectorField;        // Learned directional fields
+    private PradOp probabilityField;   // Generated probability distribution
+    private readonly Queue<Tensor> temporalBuffer;  // Historical state buffer
+    
+    public SpatialProbabilityNetwork(
+        int stateDim = 20,
+        int[] fieldShape = null,
+        int vectorDim = 8,
+        int bufferSize = 10)
+    {
+        this.stateDim = stateDim;
+        this.fieldShape = fieldShape ?? new[] { 32, 32 };
+        this.vectorDim = vectorDim;
+        this.bufferSize = bufferSize;
+        
+        // Initialize vector field with normalized random values
+        var vectorFieldData = new double[fieldShape[0] * fieldShape[1] * vectorDim];
+        Random rand = new Random();
+        for (int i = 0; i < vectorFieldData.Length; i++)
+        {
+            vectorFieldData[i] = rand.NextDouble() * 2 - 1;
+        }
+        var vectorFieldTensor = new Tensor(fieldShape.Concat(new[] { vectorDim }).ToArray(), vectorFieldData);
+        vectorField = new PradOp(NormalizeVectorField(vectorFieldTensor));
+        
+        // Initialize probability field with uniform distribution
+        var probFieldData = new double[fieldShape[0] * fieldShape[1]];
+        for (int i = 0; i < probFieldData.Length; i++)
+        {
+            probFieldData[i] = 1.0 / (fieldShape[0] * fieldShape[1]);
+        }
+        probabilityField = new PradOp(new Tensor(fieldShape, probFieldData));
+        
+        temporalBuffer = new Queue<Tensor>(bufferSize);
+    }
+
+    private Tensor NormalizeVectorField(Tensor field)
+    {
+        // Normalize vectors to unit length
+        var shape = field.Shape;
+        var result = new double[field.Data.Length];
+        
+        for (int i = 0; i < shape[0]; i++)
+        {
+            for (int j = 0; j < shape[1]; j++)
+            {
+                double sumSquares = 0;
+                for (int k = 0; k < vectorDim; k++)
+                {
+                    var idx = (i * shape[1] * vectorDim) + (j * vectorDim) + k;
+                    sumSquares += field.Data[idx] * field.Data[idx];
+                }
+                var norm = Math.Sqrt(sumSquares);
+                
+                for (int k = 0; k < vectorDim; k++)
+                {
+                    var idx = (i * shape[1] * vectorDim) + (j * vectorDim) + k;
+                    result[idx] = field.Data[idx] / norm;
+                }
+            }
+        }
+        
+        return new Tensor(shape, result);
+    }
+
+    public (PradResult probabilities, PradResult confidence) RouteState(PradOp state)
+    {
+        // Add state to temporal buffer
+        if (temporalBuffer.Count >= bufferSize)
+        {
+            temporalBuffer.Dequeue();
+        }
+        temporalBuffer.Enqueue(state.CurrentTensor);
+
+        // Calculate cosine similarity between state and vector field
+        var similarity = state.MatMul(vectorField.Transpose());
+        
+        // Generate routing probabilities using softmax
+        var routing = similarity.Then(PradOp.SoftmaxOp);
+        
+        // Calculate routing entropy
+        var entropy = routing.Then(probs => {
+            var logProbs = probs.Then(PradOp.LnOp);
+            return probs.Mul(logProbs.Result).Then(PradOp.MeanOp);
+        });
+        
+        // Calculate routing confidence as 1 - entropy
+        var confidence = entropy.Then(e => {
+            var one = new Tensor(e.Result.Shape, 1.0);
+            return new PradOp(one).Sub(e.Result);
+        });
+
+        return (routing, confidence);
+    }
+
+    public PradResult AmplifyRoute(PradResult route, PradResult confidence)
+    {
+        // Amplify routing based on confidence
+        var amplificationFactor = confidence.Then(c => {
+            var base_amp = new Tensor(c.Result.Shape, 2.0); // Base amplification factor
+            return c.Then(PradOp.ExpOp).Mul(base_amp);
+        });
+
+        return route.Then(r => r.Mul(amplificationFactor.Result));
+    }
+
+    public void UpdateFields(PradResult route, PradResult reward)
+    {
+        // Update vector field using Hebbian-like learning
+        var fieldUpdate = route.Then(r => {
+            var learningRate = new Tensor(r.Result.Shape, 0.01);
+            return r.Mul(reward.Result).Mul(learningRate);
+        });
+
+        vectorField = new PradOp(
+            vectorField.Add(fieldUpdate.Result).Result
+        );
+        vectorField = new PradOp(NormalizeVectorField(vectorField.CurrentTensor));
+
+        // Update probability field
+        var probUpdate = route.Then(r => {
+            var momentum = new Tensor(r.Result.Shape, 0.9);
+            return probabilityField.Mul(momentum)
+                .Add(r.Mul(new Tensor(r.Result.Shape, 0.1)).Result);
+        });
+
+        probabilityField = new PradOp(probUpdate.Result);
+    }
+
+    public PradResult CalculateFieldMetrics()
+    {
+        // Calculate various field metrics for monitoring
+        var fieldEntropy = probabilityField.Then(PradOp.MeanOp);
+        var fieldCoherence = vectorField.Then(v => {
+            var meanVector = v.Then(PradOp.MeanOp);
+            return v.MatMul(meanVector.Result);
+        });
+
+        return fieldCoherence;
+    }
+}
+
+---
+
+using ParallelReverseAutoDiff.PRAD;
+
+public class SpatialProbabilityNetwork 
+{
+    private readonly int stateDim;
+    private readonly int[] fieldShape;
+    private readonly int vectorDim;
+    private readonly int bufferSize;
+    
+    // Core fields
+    private PradOp vectorField;
+    private PradOp probabilityField;
+    private readonly Queue<Tensor> temporalBuffer;
+
+    // Neural components
+    private readonly PolicyNetwork policyNetwork;
+    private readonly ReflexNetwork reflexNetwork; 
+    private readonly PredictionNetwork predictionNetwork;
+
+    public SpatialProbabilityNetwork(
+        int stateDim = 20,
+        int[] fieldShape = null,
+        int vectorDim = 8,
+        int bufferSize = 10)
+    {
+        this.stateDim = stateDim;
+        this.fieldShape = fieldShape ?? new[] { 32, 32 };
+        this.vectorDim = vectorDim;
+        this.bufferSize = bufferSize;
+        
+        InitializeFields();
+        temporalBuffer = new Queue<Tensor>(bufferSize);
+
+        // Initialize neural components
+        policyNetwork = new PolicyNetwork(stateDim);
+        reflexNetwork = new ReflexNetwork(stateDim);
+        predictionNetwork = new PredictionNetwork(stateDim);
+    }
+
+    private class PolicyNetwork 
+    {
+        private readonly PradOp stateEncoder;
+        private readonly PradOp historyEncoder;
+        private readonly PradOp attention;
+        private readonly PradOp policyHead;
+        private readonly PradOp valueHead;
+
+        public PolicyNetwork(int stateDim)
+        {
+            // State encoding branch
+            stateEncoder = new PradOp(InitializeWeights(stateDim, 64));
+
+            // History encoding branch
+            historyEncoder = new PradOp(InitializeWeights(stateDim, 64));
+
+            // Multi-head attention 
+            attention = new PradOp(InitializeWeights(64, 64));
+
+            // Output heads
+            policyHead = new PradOp(InitializeWeights(128, 10));
+            valueHead = new PradOp(InitializeWeights(128, 1));
+        }
+
+        public (PradResult policy, PradResult value) Forward(PradOp currentState, PradOp history)
+        {
+            // Encode current state
+            var stateEncoded = stateEncoder.MatMul(currentState)
+                .Then(PradOp.LeakyReLUOp);
+
+            // Encode history sequence
+            var historyEncoded = historyEncoder.MatMul(history)
+                .Then(PradOp.LeakyReLUOp);
+
+            // Apply attention
+            var attentionWeights = stateEncoded.MatMul(attention)
+                .Then(x => x.MatMul(historyEncoded.Transpose().Result))
+                .Then(PradOp.SoftmaxOp);
+
+            var attentionOutput = attentionWeights.MatMul(historyEncoded.Result);
+
+            // Combine features
+            var combined = stateEncoded.Then(x => {
+                var concat = new double[x.Result.Data.Length + attentionOutput.Result.Data.Length];
+                x.Result.Data.CopyTo(concat, 0);
+                attentionOutput.Result.Data.CopyTo(concat, x.Result.Data.Length);
+                return new PradOp(new Tensor(new[] { concat.Length }, concat));
+            });
+
+            // Generate outputs
+            var policy = combined.MatMul(policyHead)
+                .Then(PradOp.SigmoidOp);
+
+            var value = combined.MatMul(valueHead);
+
+            return (policy, value);
+        }
+    }
+
+    private class ReflexNetwork 
+    {
+        private readonly PradOp layer1;
+        private readonly PradOp layer2;
+        private readonly PradOp outputLayer;
+
+        public ReflexNetwork(int stateDim)
+        {
+            layer1 = new PradOp(InitializeWeights(stateDim, 32));
+            layer2 = new PradOp(InitializeWeights(32, 16));
+            outputLayer = new PradOp(InitializeWeights(16, 5)); // 5 reflex controls
+        }
+
+        public PradResult Forward(PradOp state)
+        {
+            return state.MatMul(layer1)
+                .Then(PradOp.LeakyReLUOp)
+                .Then(x => x.MatMul(layer2.Result))
+                .Then(PradOp.LeakyReLUOp)
+                .Then(x => x.MatMul(outputLayer.Result))
+                .Then(PradOp.SigmoidOp);
+        }
+    }
+
+    private class PredictionNetwork 
+    {
+        private readonly PradOp sequenceEncoder;
+        private readonly PradOp hidden;
+        private readonly PradOp outputLayer;
+
+        public PredictionNetwork(int stateDim)
+        {
+            sequenceEncoder = new PradOp(InitializeWeights(stateDim * 10, 64));
+            hidden = new PradOp(InitializeWeights(64, 32));
+            outputLayer = new PradOp(InitializeWeights(32, 4)); // [value, confidence, upper, lower]
+        }
+
+        public PradResult Forward(PradOp sequence)
+        {
+            return sequence.MatMul(sequenceEncoder)
+                .Then(PradOp.LeakyReLUOp)
+                .Then(x => x.MatMul(hidden.Result))
+                .Then(PradOp.LeakyReLUOp)
+                .Then(x => x.MatMul(outputLayer.Result));
+        }
+    }
+
+    public (PradResult routingProbs, PradResult policy, PradResult reflexes, PradResult predictions) 
+        ProcessState(PradOp state)
+    {
+        // Route through SPN
+        var (routingProbs, confidence) = RouteState(state);
+        
+        // Get temporal context
+        var historyTensor = GetHistoryTensor();
+
+        // Generate policy
+        var (policy, value) = policyNetwork.Forward(state, new PradOp(historyTensor));
+
+        // Check reflexes
+        var reflexes = reflexNetwork.Forward(state);
+
+        // Make predictions
+        var predictions = predictionNetwork.Forward(new PradOp(historyTensor));
+
+        return (routingProbs, policy, reflexes, predictions);
+    }
+
+    private Tensor GetHistoryTensor()
+    {
+        var history = temporalBuffer.ToArray();
+        var historyData = new double[bufferSize * stateDim];
+        
+        for (int i = 0; i < history.Length; i++)
+        {
+            Array.Copy(history[i].Data, 0, historyData, i * stateDim, stateDim);
+        }
+
+        // Pad with zeros if needed
+        if (history.Length < bufferSize)
+        {
+            Array.Clear(historyData, history.Length * stateDim, (bufferSize - history.Length) * stateDim);
+        }
+
+        return new Tensor(new[] { bufferSize, stateDim }, historyData);
+    }
+
+    private static Tensor InitializeWeights(int inputDim, int outputDim)
+    {
+        var weights = new double[inputDim * outputDim];
+        var random = new Random();
+        var stddev = Math.Sqrt(2.0 / (inputDim + outputDim));
+
+        for (int i = 0; i < weights.Length; i++)
+        {
+            weights[i] = random.NextGaussian(0, stddev);
+        }
+
+        return new Tensor(new[] { inputDim, outputDim }, weights);
+    }
+
+    // Previous methods remain the same...
+}
+
+---
+
+public class SpatialProbabilityNetwork 
+{
+    // ... existing fields ...
+
+    // For backpropagation and tracking
+    private readonly List<PradOp> trainableParameters;
+    private readonly EnhancedVAE vaeModel;
+
+    public SpatialProbabilityNetwork(
+        EnhancedVAE vae,
+        int stateDim = 20,
+        int[] fieldShape = null,
+        int vectorDim = 8,
+        int bufferSize = 10)
+    {
+        this.vaeModel = vae;
+        trainableParameters = new List<PradOp>();
+        // ... existing initialization ...
+    }
+
+    // Differentiable forward pass that can be used for backprop
+    public (PradResult routing, PradResult policy, PradResult value) Forward(PradOp state)
+    {
+        // Route through either raw state or VAE latent space
+        var (routingProbs, confidence) = RouteState(state);
+        
+        // Get temporal context for policy
+        var historyTensor = GetHistoryTensor();
+        var (policy, value) = policyNetwork.Forward(state, new PradOp(historyTensor));
+
+        // Track for backprop
+        return (routingProbs, policy, value);
+    }
+
+    // VAE integration - route using latent space parameters
+    public (PradResult routing, PradResult policy) RouteLatent(FieldParameters fieldParams)
+    {
+        // Project field parameters to routing space
+        var latentProjection = ProjectFieldParameters(fieldParams);
+        
+        // Route through projected space
+        var (routingProbs, confidence) = RouteState(latentProjection);
+        
+        // Generate policy from latent state
+        var historyTensor = GetHistoryTensor();
+        var (policy, _) = policyNetwork.Forward(latentProjection, new PradOp(historyTensor));
+
+        return (routingProbs, policy);
+    }
+
+    private PradOp ProjectFieldParameters(FieldParameters fieldParams)
+    {
+        // Create field parameter tensor
+        var paramTensor = new Tensor(
+            new[] { 3 },
+            new[] { 
+                fieldParams.Curvature,
+                fieldParams.Entropy,
+                fieldParams.Alignment 
+            }
+        );
+
+        // Project through learned transformation
+        return new PradOp(paramTensor)
+            .MatMul(fieldProjector)
+            .Then(PradOp.LeakyReLUOp);
+    }
+
+    // Backpropagation support
+    public void Back(PradResult loss)
+    {
+        // Backpropagate through all trainable parameters
+        loss.Back();
+
+        // Update all parameters using stored gradients
+        foreach (var param in trainableParameters)
+        {
+            if (param.SeedGradient != null)
+            {
+                // Apply gradient update
+                var update = param.SeedGradient.ElementwiseMultiply(
+                    new Tensor(param.SeedGradient.Shape, learningRate)
+                );
+                param.Add(update);
+            }
+        }
+    }
+
+    // Reward-based credit assignment and exploration
+    public void UpdateWithReward(float reward, float discountFactor = 0.99f)
+    {
+        if (temporalBuffer.Count < 2) return;
+
+        // Calculate TD error
+        var currentValue = policyNetwork.GetValue(new PradOp(temporalBuffer.Last()));
+        var previousValue = policyNetwork.GetValue(new PradOp(temporalBuffer.ElementAt(temporalBuffer.Count - 2)));
+        
+        var tdError = reward + discountFactor * currentValue.Result.Data[0] - previousValue.Result.Data[0];
+
+        // Update field using TD error
+        var fieldUpdate = vectorField.Then(field => {
+            var learningRate = new Tensor(field.Result.Shape, 0.01 * Math.Abs(tdError));
+            return field.Mul(learningRate);
+        });
+
+        vectorField = new PradOp(
+            vectorField.Add(fieldUpdate.Result).Result
+        );
+
+        // Add exploration noise based on uncertainty
+        AddExplorationNoise();
+    }
+
+    private void AddExplorationNoise()
+    {
+        // Calculate current entropy
+        var entropy = CalculateFieldEntropy();
+        
+        // Scale noise by inverse entropy (less noise when more certain)
+        var noiseScale = 1.0 / (1.0 + Math.Exp(entropy.Result.Data[0]));
+        
+        // Add scaled Gaussian noise to vector field
+        var noise = new Tensor(vectorField.CurrentShape, 
+            Enumerable.Range(0, vectorField.CurrentTensor.Data.Length)
+                .Select(_ => Random.Shared.NextGaussian(0, noiseScale))
+                .ToArray());
+
+        vectorField = new PradOp(
+            vectorField.Add(noise).Result
+        );
+    }
+
+    // Analytics and diagnostics
+    public Dictionary<string, float> GetDiagnostics()
+    {
+        var fieldEntropy = CalculateFieldEntropy();
+        var meanAlignment = CalculateFieldAlignment();
+        var reflexActivations = GetReflexActivations();
+
+        return new Dictionary<string, float>
+        {
+            ["field_entropy"] = fieldEntropy.Result.Data[0],
+            ["mean_alignment"] = meanAlignment.Result.Data[0],
+            ["reflex_rate"] = reflexActivations,
+            ["routing_confidence"] = CalculateRoutingConfidence().Result.Data[0],
+            ["exploration_rate"] = CalculateExplorationRate().Result.Data[0]
+        };
+    }
+
+    private PradResult CalculateFieldAlignment()
+    {
+        return vectorField.Then(field => {
+            var meanVector = field.Then(PradOp.MeanOp);
+            return field.MatMul(meanVector.Result)
+                .Then(PradOp.MeanOp);
+        });
+    }
+
+    private float GetReflexActivations()
+    {
+        // Calculate percentage of states that triggered reflexes
+        var recentStates = temporalBuffer.TakeLast(10);
+        var activations = recentStates
+            .Select(state => reflexNetwork.Forward(new PradOp(state)))
+            .Count(result => result.Result.Data.Any(x => x > 0.5));
+
+        return activations / (float)Math.Max(1, recentStates.Count());
+    }
+}
+
+---
+
+public class SpatialProbabilityNetwork 
+{
+    // Add fields for world branching
+    private readonly List<SpatialProbabilityNetwork> branches;
+    private readonly Random random = new Random();
+    private float noveltyWeight = 0.1f;
+    private float branchDecayRate = 0.95f;
+
+    // Track visited routes for novelty
+    private readonly Dictionary<string, int> routeVisits;
+    
+    public SpatialProbabilityNetwork(
+        EnhancedVAE vae,
+        int stateDim = 20,
+        int[] fieldShape = null,
+        int vectorDim = 8,
+        int bufferSize = 10,
+        SpatialProbabilityNetwork parent = null)
+    {
+        // Existing initialization...
+        
+        branches = new List<SpatialProbabilityNetwork>();
+        routeVisits = new Dictionary<string, int>();
+    }
+
+    public class WorldBranch
+    {
+        public SpatialProbabilityNetwork Network { get; }
+        public float Value { get; private set; }
+        public float Probability { get; private set; }
+        public FieldParameters InitialState { get; }
+
+        public WorldBranch(
+            SpatialProbabilityNetwork network, 
+            FieldParameters state,
+            float probability)
+        {
+            Network = network;
+            InitialState = state;
+            Probability = probability;
+            Value = 0;
+        }
+
+        public void UpdateValue(float newValue)
+        {
+            Value = newValue;
+            Probability *= branchDecayRate; // Decay branch probability over time
+        }
+    }
+
+    // World branching support
+    public List<WorldBranch> SimulateWorldBranches(FieldParameters currentState, int numBranches = 3)
+    {
+        var branches = new List<WorldBranch>();
+
+        for (int i = 0; i < numBranches; i++)
+        {
+            // Create perturbed state for this branch
+            var perturbedState = PerturbFieldParameters(currentState);
+            
+            // Clone current network for this branch
+            var branchNetwork = CloneNetwork();
+            
+            // Calculate branch probability based on perturbation distance
+            float branchProb = CalculateBranchProbability(currentState, perturbedState);
+            
+            branches.Add(new WorldBranch(branchNetwork, perturbedState, branchProb));
+        }
+
+        return branches;
+    }
+
+    private FieldParameters PerturbFieldParameters(FieldParameters state)
+    {
+        return new FieldParameters(new Tensor(new[] { 3 }, new[] {
+            state.Curvature + random.NextGaussian(0, 0.1),
+            state.Entropy + random.NextGaussian(0, 0.1),
+            state.Alignment + random.NextGaussian(0, 0.1)
+        }));
+    }
+
+    private float CalculateBranchProbability(FieldParameters original, FieldParameters perturbed)
+    {
+        // Calculate probability based on parameter distance
+        float distance = (float)Math.Sqrt(
+            Math.Pow(original.Curvature - perturbed.Curvature, 2) +
+            Math.Pow(original.Entropy - perturbed.Entropy, 2) +
+            Math.Pow(original.Alignment - perturbed.Alignment, 2));
+            
+        return (float)Math.Exp(-distance);
+    }
+
+    // Enhanced exploration model
+    public class ExplorationState
+    {
+        public float NoveltyScore { get; set; }
+        public float UncertaintyScore { get; set; }
+        public float ExplorationRate { get; set; }
+    }
+
+    public ExplorationState UpdateExploration(PradOp state)
+    {
+        // Calculate route signature for novelty tracking
+        string routeSignature = CalculateRouteSignature(state);
+        
+        // Update visit count
+        routeVisits[routeSignature] = routeVisits.GetValueOrDefault(routeSignature, 0) + 1;
+
+        // Calculate novelty score
+        float noveltyScore = CalculateNoveltyScore(routeSignature);
+        
+        // Calculate uncertainty from field entropy
+        var fieldEntropy = CalculateFieldEntropy();
+        float uncertaintyScore = fieldEntropy.Result.Data[0];
+
+        // Combine for exploration rate
+        float explorationRate = CombineExplorationFactors(noveltyScore, uncertaintyScore);
+
+        return new ExplorationState
+        {
+            NoveltyScore = noveltyScore,
+            UncertaintyScore = uncertaintyScore,
+            ExplorationRate = explorationRate
+        };
+    }
+
+    private string CalculateRouteSignature(PradOp state)
+    {
+        // Discretize state into bins for signature
+        var discretized = state.CurrentTensor.Data
+            .Select(x => Math.Round(x, 2))
+            .ToArray();
+            
+        return string.Join(",", discretized);
+    }
+
+    private float CalculateNoveltyScore(string routeSignature)
+    {
+        int visits = routeVisits[routeSignature];
+        return (float)Math.Exp(-visits * noveltyWeight);
+    }
+
+    private float CombineExplorationFactors(float novelty, float uncertainty)
+    {
+        // Dynamically adjust exploration based on both novelty and uncertainty
+        float baseRate = 0.1f;
+        float noveltyFactor = noveltyWeight * novelty;
+        float uncertaintyFactor = (1 - noveltyWeight) * uncertainty;
+        
+        return baseRate * (noveltyFactor + uncertaintyFactor);
+    }
+
+    // Modified routing to incorporate exploration
+    public (PradResult probabilities, PradResult confidence) RouteState(PradOp state)
+    {
+        var (probs, conf) = base.RouteState(state);
+        
+        // Get exploration state
+        var exploration = UpdateExploration(state);
+        
+        // Inject exploration noise based on exploration rate
+        var noisyProbs = AddExplorationNoise(probs, exploration.ExplorationRate);
+        
+        // Adjust confidence based on exploration
+        var adjustedConf = AdjustConfidence(conf, exploration.ExplorationRate);
+        
+        return (noisyProbs, adjustedConf);
+    }
+
+    private PradResult AddExplorationNoise(PradResult probs, float explorationRate)
+    {
+        var noise = new Tensor(probs.Result.Shape,
+            Enumerable.Range(0, probs.Result.Data.Length)
+                .Select(_ => random.NextGaussian(0, explorationRate))
+                .ToArray());
+
+        return probs.Then(p => p.Add(noise))
+            .Then(PradOp.SoftmaxOp); // Renormalize
+    }
+
+    private PradResult AdjustConfidence(PradResult confidence, float explorationRate)
+    {
+        // Lower confidence when exploring
+        return confidence.Then(c => 
+            c.Mul(new Tensor(c.Result.Shape, 1 - explorationRate)));
+    }
+
+    // Analytics expansion for branching and exploration
+    public Dictionary<string, float> GetDiagnostics()
+    {
+        var baseDiagnostics = base.GetDiagnostics();
+        
+        // Add branching metrics
+        baseDiagnostics["active_branches"] = branches.Count;
+        baseDiagnostics["mean_branch_value"] = branches.Any() ? 
+            branches.Average(b => b.Value) : 0;
+        
+        // Add exploration metrics
+        var exploration = UpdateExploration(new PradOp(temporalBuffer.Last()));
+        baseDiagnostics["novelty_score"] = exploration.NoveltyScore;
+        baseDiagnostics["uncertainty_score"] = exploration.UncertaintyScore;
+        baseDiagnostics["exploration_rate"] = exploration.ExplorationRate;
+        
+        return baseDiagnostics;
+    }
+}
