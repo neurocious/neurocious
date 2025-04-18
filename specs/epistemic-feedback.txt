@@ -1,0 +1,331 @@
+Here is where the shift comes... public class RegimeGraph
+{
+    private readonly Dictionary<string, Node> nodes;
+    private readonly List<Edge> edges;
+
+    public class Node
+    {
+        public string RegimeId { get; init; }
+        public FieldParameters FieldParams { get; init; }
+        public float DecayRate { get; set; }
+        public float Eigenvalue { get; set; }  // For spectral analysis
+        public Dictionary<SignalType, float> SignalReturns { get; set; }
+    }
+
+    public class Edge
+    {
+        public string FromRegimeId { get; init; }
+        public string ToRegimeId { get; init; }
+        public float TransitionProbability { get; set; }
+        public float ExpectedReturn { get; set; }
+        public float Weight => TransitionProbability * ExpectedReturn;
+    }
+
+    public void BuildGraph(List<TradeOutcome> history)
+    {
+        // Build nodes from unique regimes
+        foreach (var outcome in history)
+        {
+            if (!nodes.ContainsKey(outcome.RegimeId))
+            {
+                nodes[outcome.RegimeId] = new Node
+                {
+                    RegimeId = outcome.RegimeId,
+                    FieldParams = outcome.Signal.FieldParams,
+                    SignalReturns = new Dictionary<SignalType, float>()
+                };
+            }
+
+            // Update node statistics
+            UpdateNodeStats(nodes[outcome.RegimeId], outcome);
+        }
+
+        // Build edges from transitions
+        BuildTransitionEdges(history);
+
+        // Calculate spectral properties
+        CalculateSpectralProperties();
+    }
+
+    public List<(string[] path, float probability)> SimulateBeliefPaths(
+        string startRegime,
+        int depth,
+        int numPaths = 1000)
+    {
+        var paths = new List<(string[] path, float probability)>();
+        
+        for (int i = 0; i < numPaths; i++)
+        {
+            var (path, prob) = MonteCarloRollout(startRegime, depth);
+            paths.Add((path, prob));
+        }
+
+        return paths.OrderByDescending(p => p.probability).ToList();
+    }
+
+    private (string[] path, float probability) MonteCarloRollout(string startRegime, int depth)
+    {
+        var path = new string[depth];
+        path[0] = startRegime;
+        float probability = 1.0f;
+
+        for (int i = 1; i < depth; i++)
+        {
+            var currentNode = nodes[path[i - 1]];
+            var outgoingEdges = edges.Where(e => e.FromRegimeId == currentNode.RegimeId).ToList();
+            
+            // Sample next regime based on transition probabilities
+            float rand = Random.Shared.NextSingle();
+            float cumProb = 0;
+            
+            foreach (var edge in outgoingEdges)
+            {
+                cumProb += edge.TransitionProbability;
+                if (rand <= cumProb)
+                {
+                    path[i] = edge.ToRegimeId;
+                    probability *= edge.TransitionProbability;
+                    break;
+                }
+            }
+        }
+
+        return (path, probability);
+    }
+}
+
+public class BeliefPolicyLearner
+{
+    private readonly PradOp policyNetwork;
+    private readonly PradOp valueNetwork;
+    private readonly Queue<Experience> replayBuffer;
+
+    public class Experience
+    {
+        public FieldParameters State { get; init; }
+        public string RegimeId { get; init; }
+        public SignalType Action { get; init; }
+        public float Reward { get; init; }
+        public FieldParameters NextState { get; init; }
+        public string NextRegimeId { get; init; }
+    }
+
+    public class PolicyOutput
+    {
+        public Dictionary<SignalType, float> ActionProbabilities { get; init; }
+        public float ValueEstimate { get; init; }
+    }
+
+    public PolicyOutput GetOptimalAction(FieldParameters state, string regimeId)
+    {
+        // Encode state for policy network
+        var stateEncoding = EncodeState(state, regimeId);
+        
+        // Get policy and value outputs
+        var (policyOutput, valueOutput) = ForwardPass(stateEncoding);
+        
+        // Convert to action probabilities
+        var actionProbs = new Dictionary<SignalType, float>();
+        foreach (SignalType type in Enum.GetValues(typeof(SignalType)))
+        {
+            int idx = (int)type;
+            actionProbs[type] = policyOutput.Result.Data[idx];
+        }
+
+        return new PolicyOutput
+        {
+            ActionProbabilities = actionProbs,
+            ValueEstimate = valueOutput.Result.Data[0]
+        };
+    }
+
+    public void UpdatePolicy(Experience experience)
+    {
+        replayBuffer.Enqueue(experience);
+        
+        if (replayBuffer.Count >= batchSize)
+        {
+            TrainOnBatch();
+        }
+    }
+
+    private void TrainOnBatch()
+    {
+        var batch = replayBuffer.Take(batchSize).ToList();
+        
+        // Calculate advantages and returns
+        var (advantages, returns) = CalculateAdvantages(batch);
+        
+        // Update policy using PPO
+        UpdatePolicyNetwork(batch, advantages);
+        
+        // Update value network
+        UpdateValueNetwork(batch, returns);
+    }
+}
+
+public class CounterfactualAnalyzer
+{
+    private readonly RegimeGraph regimeGraph;
+    private readonly BeliefPolicyLearner policyLearner;
+
+    public class CounterfactualScenario
+    {
+        public TradeOutcome ActualOutcome { get; init; }
+        public List<(SignalType alternativeSignal, float expectedPnl)> Alternatives { get; init; }
+        public List<(string[] path, float pnl)> AlternativePaths { get; init; }
+    }
+
+    public CounterfactualScenario AnalyzeAlternatives(TradeOutcome outcome)
+    {
+        var alternatives = new List<(SignalType, float)>();
+        
+        // Analyze each alternative signal type
+        foreach (SignalType type in Enum.GetValues(typeof(SignalType)))
+        {
+            if (type == outcome.Signal.Type) continue;
+
+            // Simulate alternative scenario
+            float expectedPnl = SimulateAlternativeSignal(
+                outcome.Signal.FieldParams,
+                outcome.RegimeId,
+                type);
+                
+            alternatives.Add((type, expectedPnl));
+        }
+
+        // Simulate alternative belief paths
+        var altPaths = regimeGraph.SimulateBeliefPaths(
+            outcome.RegimeId,
+            depth: 5)
+            .Select(p => (p.path, SimulatePathPnl(p.path)))
+            .ToList();
+
+        return new CounterfactualScenario
+        {
+            ActualOutcome = outcome,
+            Alternatives = alternatives,
+            AlternativePaths = altPaths
+        };
+    }
+
+    private float SimulateAlternativeSignal(
+        FieldParameters state,
+        string regimeId,
+        SignalType alternativeType)
+    {
+        // Get policy for this state
+        var policy = policyLearner.GetOptimalAction(state, regimeId);
+        
+        // Get regime transition probabilities
+        var transitions = regimeGraph.GetTransitionProbabilities(regimeId);
+        
+        // Calculate expected return under this policy
+        float expectedReturn = 0f;
+        foreach (var (nextRegime, prob) in transitions)
+        {
+            var node = regimeGraph.GetNode(nextRegime);
+            float signalReturn = node.SignalReturns.GetValueOrDefault(alternativeType, 0f);
+            expectedReturn += prob * signalReturn;
+        }
+
+        return expectedReturn;
+    }
+
+    public string GenerateCounterfactualReport(CounterfactualScenario scenario)
+    {
+        var report = new StringBuilder();
+        
+        report.AppendLine($"Counterfactual Analysis for {scenario.ActualOutcome.Signal.Type} Trade");
+        report.AppendLine($"Actual PnL: {scenario.ActualOutcome.Pnl:F2}");
+        
+        report.AppendLine("\nAlternative Signals:");
+        foreach (var (type, pnl) in scenario.Alternatives.OrderByDescending(a => a.expectedPnl))
+        {
+            float difference = pnl - scenario.ActualOutcome.Pnl;
+            report.AppendLine($"- {type}: {pnl:F2} (Δ: {difference:F2})");
+        }
+
+        report.AppendLine("\nTop Alternative Paths:");
+        foreach (var (path, pnl) in scenario.AlternativePaths.Take(3))
+        {
+            report.AppendLine($"- Path: {string.Join(" → ", path)}");
+            report.AppendLine($"  Expected PnL: {pnl:F2}");
+        }
+
+        return report.ToString();
+    }
+}
+
+---
+
+Reinforcement Learning from Epistemic Feedback (RLEF): A New Paradigm for Fine-Tuning Generative Models via SPN-VAE Dynamics
+Abstract
+We introduce a novel fine-tuning methodology for generative AI systems based on Reinforcement Learning from Epistemic Feedback (RLEF). Unlike traditional reinforcement learning that relies on explicit scalar rewards or human preference models, RLEF leverages latent epistemic signatures captured through a hybrid Spatial Probability Network (SPN) and Variational Autoencoder (VAE) architecture. This system enables the measurement, interpretation, and alignment of high-level belief structures and narrative dynamics within language models. We demonstrate how this approach allows for the preservation, transfer, and evolution of “cognitive character” across models — offering a pathway toward transparent and controllable AI systems with traceable epistemology and belief-conviction structures.
+
+1. Introduction
+As large language models (LLMs) continue to evolve in scale and performance, one critical shortcoming persists: we understand what these models generate, but not why. Traditional methods for fine-tuning and alignment, such as Reinforcement Learning from Human Feedback (RLHF), are powerful but limited. They optimize behavior without capturing the epistemic rationale or belief states that underpin that behavior.
+
+We propose an alternative: a neurosymbolic epistemic feedback mechanism, grounded in a hybrid SPN-VAE system. This architecture models the internal state of generative systems in terms of dynamic fields — curvature, entropy, alignment — capturing not just outputs, but belief formation over time. When used in reinforcement learning, these belief fields serve as the basis for fine-tuning via epistemic similarity, enabling belief-guided model steering.
+
+2. The SPN-VAE Framework
+At the core of our method is a Spatial Probability Network (SPN) augmented with a Variational Autoencoder (VAE). Together, these components model latent state trajectories across time and context, extracting the following key epistemic properties:
+
+Curvature – measures nonlinearity and regime instability in internal belief manifolds.
+
+Entropy – measures epistemic uncertainty and narrative collapse.
+
+Alignment – measures directional agreement between latent dynamics and output behavior.
+
+Inertia and temperature – track stability and volatility across belief trajectories.
+
+These field values form a topological fingerprint of a model's reasoning style — a unique epistemic signature.
+
+3. RLEF: A New Fine-Tuning Approach
+The RLEF paradigm treats belief trajectories as target fields. To transfer belief structures from one model to another, or preserve a model's character, we:
+
+Capture SPN-VAE field trajectories of a reference model (e.g., an older LLM version).
+
+Train a new model on arbitrary data.
+
+Fine-tune the new model using a custom reinforcement signal based on:
+
+Similarity to the reference belief fields (distance in curvature/entropy space).
+
+Alignment of narrative vector dynamics.
+
+Regime transition similarity (using a belief-path graph).
+
+This forms a closed-loop reinforcement architecture driven by internal model cognition, rather than only behavioral reward.
+
+4. Applications
+4.1 Epistemic Transfer
+Transfer belief structures between models with disjoint training data — enabling style-preserving rewrites or cross-domain convergence.
+
+4.2 Model Resurrection
+Recover the "soul" of deprecated or expired models (e.g., old Anthropic, OpenAI, or Cohere checkpoints) by imprinting their epistemic traits onto new architectures.
+
+4.3 Cognitive Ensembles
+Build ensembles of LLMs with complementary beliefs. Use SPN-VAE to navigate disagreements, contradictions, or narrative divergence between models.
+
+4.4 Transparent Steering
+Use field analysis to trace why a model made a decision, where it lies in the belief space, and how it might be nudged toward different reasoning.
+
+5. Evaluation and Metrics
+We propose a new set of epistemic evaluation metrics:
+
+Epistemic Distance – deviation between SPN-VAE fields across models.
+
+Narrative Fidelity – alignment in story arcs or conclusions under ambiguity.
+
+Regime Transition Similarity – overlap in how belief regimes unfold over context.
+
+Conviction Stability – resistance to belief collapse under adversarial inputs.
+
+6. Toward Epistemically Aligned AI
+The SPN-VAE + RLEF system represents a shift from black-box behaviorism to field-based epistemology modeling. It allows us to preserve, transfer, and sculpt model behavior based not just on performance — but on why a model chooses what it does.
+
+Where RLHF made AI more pleasing, RLEF has the potential to make it more principled.
+
+7. Conclusion
+We have proposed a new framework for AI fine-tuning based on epistemic feedback captured by SPN-VAE architectures. By grounding reinforcement learning in dynamic belief structures, this method opens new frontiers in interpretability, alignment, and model-to-model reasoning transfer. As generative models become more capable and autonomous, tools like RLEF may be critical in ensuring they remain transparent, transferable, and trustworthy.
