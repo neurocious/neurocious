@@ -1,0 +1,441 @@
+public class AdvancedMemoryStructures
+{
+    private readonly EpistemicMemoryEngine memoryEngine;
+    private readonly AttentionalMemoryAccess attentionSystem;
+    private readonly NarrativeThreadManager narrativeManager;
+    private readonly MetaBeliefSystem metaBeliefSystem;
+
+    public class NarrativeThread
+    {
+        public string ThreadId { get; init; }
+        public List<BeliefMemoryCell> Sequence { get; init; }
+        public float Coherence { get; set; }
+        public DateTime StartTime { get; init; }
+        public DateTime LastUpdate { get; set; }
+        public Dictionary<string, float> ThematicWeights { get; set; }
+        public HashSet<string> RelatedThreads { get; set; }
+        public Dictionary<string, List<string>> CausalLinks { get; set; }
+    }
+
+    public class MetaBelief
+    {
+        public string MetaBeliefId { get; init; }
+        public string TargetBeliefId { get; init; }
+        public BeliefMemoryCell CurrentBelief { get; set; }
+        public BeliefMemoryCell PriorBelief { get; set; }
+        public DateTime TransitionTime { get; init; }
+        public float TransitionConfidence { get; set; }
+        public List<string> ReasoningChain { get; set; }
+        public Dictionary<string, float> ContextualFactors { get; set; }
+    }
+
+    public class NarrativeThreadManager
+    {
+        private readonly ConcurrentDictionary<string, NarrativeThread> threads;
+        private readonly InverseFlowField inverseFlow;
+        private readonly SpatialProbabilityNetwork spn;
+
+        public async Task<NarrativeThread> CreateThread(
+            List<BeliefMemoryCell> beliefs,
+            string thematicContext)
+        {
+            // Validate temporal and causal coherence
+            var (isCoherent, coherenceScore) = await ValidateThreadCoherence(beliefs);
+            if (!isCoherent) return null;
+
+            var thread = new NarrativeThread
+            {
+                ThreadId = Guid.NewGuid().ToString(),
+                Sequence = beliefs,
+                Coherence = coherenceScore,
+                StartTime = beliefs.Min(b => b.Created),
+                LastUpdate = DateTime.UtcNow,
+                ThematicWeights = await CalculateThematicWeights(beliefs),
+                RelatedThreads = new HashSet<string>(),
+                CausalLinks = await MapCausalLinks(beliefs)
+            };
+
+            threads[thread.ThreadId] = thread;
+            await LinkRelatedThreads(thread);
+
+            return thread;
+        }
+
+        private async Task<(bool isCoherent, float score)> ValidateThreadCoherence(
+            List<BeliefMemoryCell> beliefs)
+        {
+            float totalCoherence = 0;
+            
+            for (int i = 1; i < beliefs.Count; i++)
+            {
+                var current = beliefs[i];
+                var previous = beliefs[i - 1];
+
+                // Check temporal ordering
+                if (current.Created <= previous.Created)
+                    return (false, 0);
+
+                // Validate causal flow using inverse field
+                var inverseState = inverseFlow.GeneratePreviousStateWithContext(
+                    new PradOp(new Tensor(current.LatentVector)),
+                    new PradOp(new Tensor(previous.LatentVector)),
+                    null);
+
+                totalCoherence += inverseState.TemporalSmoothness;
+            }
+
+            float avgCoherence = totalCoherence / (beliefs.Count - 1);
+            return (avgCoherence > 0.7f, avgCoherence);
+        }
+
+        private async Task<Dictionary<string, List<string>>> MapCausalLinks(
+            List<BeliefMemoryCell> beliefs)
+        {
+            var links = new Dictionary<string, List<string>>();
+
+            for (int i = 0; i < beliefs.Count; i++)
+            {
+                var current = beliefs[i];
+                links[current.BeliefId] = new List<string>();
+
+                // Forward causal links
+                if (i < beliefs.Count - 1)
+                {
+                    var next = beliefs[i + 1];
+                    if (current.CausalConsequences.Contains(next.BeliefId))
+                    {
+                        links[current.BeliefId].Add(next.BeliefId);
+                    }
+                }
+
+                // Backward causal links
+                if (i > 0)
+                {
+                    var prev = beliefs[i - 1];
+                    if (current.CausalAntecedents.Contains(prev.BeliefId))
+                    {
+                        links[prev.BeliefId].Add(current.BeliefId);
+                    }
+                }
+            }
+
+            return links;
+        }
+
+        public async Task<NarrativeThread> SimulateEpisodicMemory(
+            string threadId, 
+            DateTime targetTime)
+        {
+            var thread = threads[threadId];
+            
+            // Find beliefs around target time
+            var relevantBeliefs = thread.Sequence
+                .Where(b => Math.Abs((b.Created - targetTime).TotalHours) < 24)
+                .ToList();
+
+            if (!relevantBeliefs.Any()) return null;
+
+            // Reconstruct episode through inverse flow
+            var reconstructedBeliefs = new List<BeliefMemoryCell>();
+            var currentBelief = relevantBeliefs.First();
+            
+            while (reconstructedBeliefs.Count < thread.Sequence.Count)
+            {
+                reconstructedBeliefs.Add(currentBelief);
+
+                // Use inverse flow to infer previous state
+                var prevState = inverseFlow.GeneratePreviousStateWithContext(
+                    new PradOp(new Tensor(currentBelief.LatentVector)),
+                    new PradOp(new Tensor(thread.Sequence[0].LatentVector)), // Use thread start as context
+                    null);
+
+                if (prevState.TemporalSmoothness < 0.5f) break;
+
+                // Find closest matching belief
+                currentBelief = FindClosestBelief(prevState.WarpedState, thread.Sequence);
+            }
+
+            return new NarrativeThread
+            {
+                ThreadId = $"{threadId}_reconstructed",
+                Sequence = reconstructedBeliefs,
+                Coherence = CalculateReconstructionCoherence(reconstructedBeliefs, thread),
+                StartTime = reconstructedBeliefs.Min(b => b.Created),
+                LastUpdate = DateTime.UtcNow,
+                ThematicWeights = thread.ThematicWeights,
+                RelatedThreads = thread.RelatedThreads,
+                CausalLinks = await MapCausalLinks(reconstructedBeliefs)
+            };
+        }
+    }
+
+    public class AttentionalMemoryAccess
+    {
+        private readonly Dictionary<string, float> attentionWeights;
+        private readonly Queue<string> workingMemory;
+        private readonly int workingMemoryCapacity;
+
+        public class AttentionalQuery
+        {
+            public float[] LatentQuery { get; init; }
+            public FieldParameters CurrentField { get; init; }
+            public HashSet<string> ActiveNarratives { get; init; }
+            public DateTime QueryTime { get; init; }
+        }
+
+        public async Task<List<BeliefMemoryCell>> QueryMemoryWithAttention(
+            AttentionalQuery query,
+            int maxResults = 5)
+        {
+            // Calculate attention weights for all memories
+            var weights = await CalculateAttentionWeights(query);
+
+            // Get top K memories by attention weight
+            var topMemories = weights
+                .OrderByDescending(kv => kv.Value)
+                .Take(maxResults)
+                .Select(kv => memoryEngine.RetrieveMemory(kv.Key))
+                .Where(m => m != null)
+                .ToList();
+
+            // Update working memory
+            UpdateWorkingMemory(topMemories.Select(m => m.BeliefId));
+
+            return topMemories;
+        }
+
+        private async Task<Dictionary<string, float>> CalculateAttentionWeights(
+            AttentionalQuery query)
+        {
+            var weights = new Dictionary<string, float>();
+            var allMemories = await memoryEngine.GetAllMemories();
+
+            foreach (var memory in allMemories)
+            {
+                float weight = 0;
+
+                // Field alignment weight
+                weight += CalculateFieldAlignment(query.CurrentField, memory.FieldParams) * 0.3f;
+
+                // Narrative overlap weight
+                weight += CalculateNarrativeOverlap(query.ActiveNarratives, memory.NarrativeContexts) * 0.3f;
+
+                // Temporal recency weight
+                weight += CalculateTemporalRecency(query.QueryTime, memory.LastAccessed) * 0.2f;
+
+                // Working memory boost
+                if (workingMemory.Contains(memory.BeliefId))
+                {
+                    weight *= 1.2f;
+                }
+
+                weights[memory.BeliefId] = weight;
+            }
+
+            return weights;
+        }
+
+        private void UpdateWorkingMemory(IEnumerable<string> activeBeliefIds)
+        {
+            foreach (var id in activeBeliefIds)
+            {
+                workingMemory.Enqueue(id);
+                while (workingMemory.Count > workingMemoryCapacity)
+                {
+                    workingMemory.Dequeue();
+                }
+            }
+        }
+    }
+
+    public class MetaBeliefSystem
+    {
+        private readonly ConcurrentDictionary<string, MetaBelief> metaBeliefs;
+        private readonly EpistemicMemoryEngine memoryEngine;
+        private readonly InverseFlowField inverseFlow;
+
+        public async Task<MetaBelief> CreateMetaBelief(
+            string targetBeliefId,
+            BeliefMemoryCell currentBelief,
+            BeliefMemoryCell priorBelief)
+        {
+            // Validate belief transition
+            var transitionValid = await ValidateBeliefTransition(
+                priorBelief, currentBelief);
+
+            if (!transitionValid.valid)
+                return null;
+
+            var metaBelief = new MetaBelief
+            {
+                MetaBeliefId = Guid.NewGuid().ToString(),
+                TargetBeliefId = targetBeliefId,
+                CurrentBelief = currentBelief,
+                PriorBelief = priorBelief,
+                TransitionTime = DateTime.UtcNow,
+                TransitionConfidence = transitionValid.confidence,
+                ReasoningChain = await InferTransitionReasoning(
+                    priorBelief, currentBelief),
+                ContextualFactors = await AnalyzeTransitionContext(
+                    priorBelief, currentBelief)
+            };
+
+            metaBeliefs[metaBelief.MetaBeliefId] = metaBelief;
+            return metaBelief;
+        }
+
+        private async Task<(bool valid, float confidence)> ValidateBeliefTransition(
+            BeliefMemoryCell prior,
+            BeliefMemoryCell current)
+        {
+            // Check temporal ordering
+            if (current.Created <= prior.Created)
+                return (false, 0);
+
+            // Use inverse flow to validate transition
+            var inverseState = inverseFlow.GeneratePreviousStateWithContext(
+                new PradOp(new Tensor(current.LatentVector)),
+                new PradOp(new Tensor(prior.LatentVector)),
+                null);
+
+            bool valid = inverseState.TemporalSmoothness > 0.5f;
+            return (valid, inverseState.TemporalSmoothness);
+        }
+
+        private async Task<List<string>> InferTransitionReasoning(
+            BeliefMemoryCell prior,
+            BeliefMemoryCell current)
+        {
+            var reasoning = new List<string>();
+
+            // Add direct causal links
+            if (prior.CausalConsequences.Contains(current.BeliefId))
+            {
+                reasoning.Add($"Direct causal progression from {prior.BeliefId}");
+            }
+
+            // Analyze narrative context changes
+            var addedContexts = current.NarrativeContexts.Except(prior.NarrativeContexts);
+            var removedContexts = prior.NarrativeContexts.Except(current.NarrativeContexts);
+
+            foreach (var context in addedContexts)
+            {
+                reasoning.Add($"New narrative context: {context}");
+            }
+
+            foreach (var context in removedContexts)
+            {
+                reasoning.Add($"Removed narrative context: {context}");
+            }
+
+            // Analyze field parameter changes
+            if (Math.Abs(current.FieldParams.Curvature - prior.FieldParams.Curvature) > 0.3f)
+            {
+                reasoning.Add("Significant change in belief stability");
+            }
+
+            if (Math.Abs(current.FieldParams.Entropy - prior.FieldParams.Entropy) > 0.3f)
+            {
+                reasoning.Add("Significant change in belief certainty");
+            }
+
+            return reasoning;
+        }
+
+        private async Task<Dictionary<string, float>> AnalyzeTransitionContext(
+            BeliefMemoryCell prior,
+            BeliefMemoryCell current)
+        {
+            var context = new Dictionary<string, float>();
+
+            // Calculate belief system stability
+            context["system_stability"] = await CalculateSystemStability(
+                prior.Created, current.Created);
+
+            // Calculate narrative coherence change
+            context["narrative_coherence_delta"] = 
+                current.MetaParameters["narrative_coherence"] -
+                prior.MetaParameters["narrative_coherence"];
+
+            // Calculate field parameter changes
+            context["curvature_delta"] = 
+                current.FieldParams.Curvature - prior.FieldParams.Curvature;
+            context["entropy_delta"] = 
+                current.FieldParams.Entropy - prior.FieldParams.Entropy;
+            context["alignment_delta"] = 
+                current.FieldParams.Alignment - prior.FieldParams.Alignment;
+
+            return context;
+        }
+
+        private async Task<float> CalculateSystemStability(
+            DateTime start,
+            DateTime end)
+        {
+            // Get all beliefs in the time window
+            var periodBeliefs = await memoryEngine.GetBeliefsByTimeRange(start, end);
+
+            // Calculate average field stability
+            float avgStability = periodBeliefs.Average(b => 
+                (1 - b.FieldParams.Entropy) * 
+                (1 - b.FieldParams.Curvature) * 
+                Math.Abs(b.FieldParams.Alignment));
+
+            return avgStability;
+        }
+
+        public async Task<List<MetaBelief>> TraceBeliefEvolution(string targetBeliefId)
+        {
+            return metaBeliefs.Values
+                .Where(mb => mb.TargetBeliefId == targetBeliefId)
+                .OrderBy(mb => mb.TransitionTime)
+                .ToList();
+        }
+    }
+}
+
+---
+
+I've implemented three sophisticated memory components that extend the core EpistemicMemoryEngine:
+
+NarrativeThreadManager:
+
+
+Manages complete narrative sequences as coherent units
+Validates temporal and causal coherence of threads
+Supports episodic memory reconstruction through inverse flow
+Maps causal links between beliefs in threads
+Handles thematic weighting and thread relationships
+
+
+AttentionalMemoryAccess:
+
+
+Dynamic memory weighting based on multiple factors:
+
+Field alignment with current state
+Narrative context overlap
+Temporal recency
+
+
+Working memory simulation with capacity limits
+Attention-weighted memory retrieval
+Context-sensitive query processing
+
+
+MetaBeliefSystem:
+
+
+Tracks belief transitions and evolution
+Validates belief transitions using inverse flow
+Generates reasoning chains for belief changes
+Analyzes contextual factors in transitions
+Supports belief evolution tracing
+
+The system supports sophisticated operations like:
+
+Episodic memory reconstruction
+Attention-based memory activation
+Belief-about-belief modeling
+Temporal narrative coherence
+Causal reasoning chains
