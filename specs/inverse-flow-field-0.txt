@@ -1,0 +1,313 @@
+using ParallelReverseAutoDiff.PRAD;
+
+public class InverseFlowField
+{
+    private readonly int[] fieldShape;
+    private readonly int vectorDim;
+    private readonly float learningRate;
+    private PradOp inverseVectorField;  // Stores inverse direction vectors
+    private PradOp flowStrengthField;   // Stores flow magnitudes
+
+    public InverseFlowField(int[] fieldShape, int vectorDim, float learningRate = 0.01f)
+    {
+        this.fieldShape = fieldShape;
+        this.vectorDim = vectorDim;
+        this.learningRate = learningRate;
+
+        InitializeFields();
+    }
+
+    private void InitializeFields()
+    {
+        // Initialize inverse vector field with normalized random vectors
+        var inverseFieldData = new double[fieldShape[0] * fieldShape[1] * vectorDim];
+        Random rand = new Random();
+        for (int i = 0; i < inverseFieldData.Length; i++)
+        {
+            inverseFieldData[i] = rand.NextDouble() * 2 - 1;
+        }
+        var inverseTensor = new Tensor(fieldShape.Concat(new[] { vectorDim }).ToArray(), inverseFieldData);
+        inverseVectorField = new PradOp(NormalizeVectorField(inverseTensor));
+
+        // Initialize flow strength field uniformly
+        var strengthData = new double[fieldShape[0] * fieldShape[1]];
+        for (int i = 0; i < strengthData.Length; i++)
+        {
+            strengthData[i] = 1.0 / (fieldShape[0] * fieldShape[1]);
+        }
+        flowStrengthField = new PradOp(new Tensor(fieldShape, strengthData));
+    }
+
+    private Tensor NormalizeVectorField(Tensor field)
+    {
+        var shape = field.Shape;
+        var result = new double[field.Data.Length];
+        
+        for (int i = 0; i < shape[0]; i++)
+        {
+            for (int j = 0; j < shape[1]; j++)
+            {
+                double sumSquares = 0;
+                for (int k = 0; k < vectorDim; k++)
+                {
+                    var idx = (i * shape[1] * vectorDim) + (j * vectorDim) + k;
+                    sumSquares += field.Data[idx] * field.Data[idx];
+                }
+                var norm = Math.Sqrt(sumSquares);
+                
+                for (int k = 0; k < vectorDim; k++)
+                {
+                    var idx = (i * shape[1] * vectorDim) + (j * vectorDim) + k;
+                    result[idx] = field.Data[idx] / norm;
+                }
+            }
+        }
+        
+        return new Tensor(shape, result);
+    }
+
+    public (PradResult inverseRouting, PradResult confidence) RouteBackward(PradOp state)
+    {
+        // Calculate similarity between state and inverse vector field
+        var similarity = state.MatMul(inverseVectorField.Transpose());
+        
+        // Generate routing probabilities using softmax
+        var routing = similarity.Then(PradOp.SoftmaxOp);
+        
+        // Weight routing by flow strength
+        var weightedRouting = routing.Then(r => r.ElementwiseMultiply(flowStrengthField.Result));
+        
+        // Calculate routing confidence
+        var confidence = weightedRouting.Then(wr => {
+            var entropy = wr.Then(PradOp.LnOp)
+                           .Then(ln => ln.ElementwiseMultiply(wr.Result))
+                           .Then(PradOp.MeanOp);
+            return new PradOp(new Tensor(entropy.Result.Shape, 1.0)).Sub(entropy.Result);
+        });
+
+        return (weightedRouting, confidence);
+    }
+
+    public (PradResult[] previousStates, float[] probabilities) InferPreviousStates(
+        PradOp currentState, 
+        int numStates = 3)
+    {
+        // Get backward routing probabilities
+        var (routing, _) = RouteBackward(currentState);
+        
+        // Extract top K probable previous positions
+        var topK = ExtractTopK(routing.Result, numStates);
+        
+        // Generate previous states for each position
+        var previousStates = new PradResult[numStates];
+        var probabilities = new float[numStates];
+        
+        for (int i = 0; i < numStates; i++)
+        {
+            var (pos, prob) = topK[i];
+            previousStates[i] = GeneratePreviousState(currentState, pos);
+            probabilities[i] = prob;
+        }
+
+        return (previousStates, probabilities);
+    }
+
+    private (int[] position, float probability)[] ExtractTopK(Tensor routingProbs, int k)
+    {
+        var flattened = new List<(int[] pos, float prob)>();
+        
+        for (int i = 0; i < fieldShape[0]; i++)
+        {
+            for (int j = 0; j < fieldShape[1]; j++)
+            {
+                flattened.Add(
+                    (new[] { i, j }, 
+                     (float)routingProbs.Data[i * fieldShape[1] + j]));
+            }
+        }
+        
+        return flattened.OrderByDescending(x => x.prob)
+                       .Take(k)
+                       .ToArray();
+    }
+
+    private PradResult GeneratePreviousState(PradOp currentState, int[] position)
+    {
+        // Extract inverse vector at position
+        var inverseVector = ExtractVectorAtPosition(inverseVectorField.Result, position);
+        
+        // Apply inverse transformation
+        return currentState.Then(s => {
+            var transformed = s.Add(new Tensor(s.Result.Shape, inverseVector));
+            return transformed.Then(PradOp.LeakyReLUOp);
+        });
+    }
+
+    private double[] ExtractVectorAtPosition(Tensor field, int[] position)
+    {
+        var vector = new double[vectorDim];
+        var baseIdx = (position[0] * fieldShape[1] * vectorDim) + (position[1] * vectorDim);
+        
+        for (int i = 0; i < vectorDim; i++)
+        {
+            vector[i] = field.Data[baseIdx + i];
+        }
+        
+        return vector;
+    }
+
+    public void UpdateFromForwardField(PradOp forwardField, PradResult forwardRouting)
+    {
+        // Compute inverse vectors from forward field
+        var inverseUpdate = forwardField.Then(field => {
+            // Negate and normalize vectors
+            var negated = field.ElementwiseMultiply(
+                new Tensor(field.Result.Shape, -1.0));
+            return new PradOp(NormalizeVectorField(negated.Result));
+        });
+
+        // Update inverse vector field
+        inverseVectorField = new PradOp(
+            inverseVectorField.Add(
+                inverseUpdate.Result.ElementwiseMultiply(
+                    new Tensor(inverseUpdate.Result.Shape, learningRate)))
+            .Result);
+
+        // Update flow strength based on forward routing
+        var strengthUpdate = forwardRouting.Then(r => {
+            var momentum = new Tensor(r.Result.Shape, 0.9);
+            return flowStrengthField.Mul(momentum)
+                .Add(r.Mul(new Tensor(r.Result.Shape, 0.1)).Result);
+        });
+
+        flowStrengthField = new PradOp(strengthUpdate.Result);
+    }
+
+    public class InverseFlowMetrics
+    {
+        public float AverageFlowStrength { get; init; }
+        public float DirectionalCoherence { get; init; }
+        public float BackwardConfidence { get; init; }
+        public Dictionary<string, float> FieldStatistics { get; init; }
+    }
+
+    public InverseFlowMetrics CalculateMetrics()
+    {
+        // Calculate average flow strength
+        var avgStrength = flowStrengthField.Then(PradOp.MeanOp);
+
+        // Calculate directional coherence of inverse vectors
+        var coherence = inverseVectorField.Then(field => {
+            var meanVector = field.Then(PradOp.MeanOp);
+            return field.MatMul(meanVector.Result);
+        });
+
+        // Calculate field statistics
+        var fieldStats = CalculateFieldStatistics();
+
+        return new InverseFlowMetrics
+        {
+            AverageFlowStrength = avgStrength.Result.Data[0],
+            DirectionalCoherence = coherence.Result.Data[0],
+            BackwardConfidence = fieldStats["confidence"],
+            FieldStatistics = fieldStats
+        };
+    }
+
+    private Dictionary<string, float> CalculateFieldStatistics()
+    {
+        var stats = new Dictionary<string, float>();
+        
+        // Calculate various statistical measures of the field
+        var vectorMagnitudes = new double[fieldShape[0] * fieldShape[1]];
+        var maxMagnitude = double.MinValue;
+        var minMagnitude = double.MaxValue;
+        
+        for (int i = 0; i < fieldShape[0]; i++)
+        {
+            for (int j = 0; j < fieldShape[1]; j++)
+            {
+                double sumSquares = 0;
+                for (int k = 0; k < vectorDim; k++)
+                {
+                    var idx = (i * fieldShape[1] * vectorDim) + (j * vectorDim) + k;
+                    sumSquares += Math.Pow(inverseVectorField.Result.Data[idx], 2);
+                }
+                var magnitude = Math.Sqrt(sumSquares);
+                vectorMagnitudes[i * fieldShape[1] + j] = magnitude;
+                
+                maxMagnitude = Math.Max(maxMagnitude, magnitude);
+                minMagnitude = Math.Min(minMagnitude, magnitude);
+            }
+        }
+
+        stats["max_magnitude"] = (float)maxMagnitude;
+        stats["min_magnitude"] = (float)minMagnitude;
+        stats["mean_magnitude"] = (float)vectorMagnitudes.Average();
+        stats["magnitude_std"] = (float)Math.Sqrt(
+            vectorMagnitudes.Select(m => Math.Pow(m - stats["mean_magnitude"], 2)).Average());
+        stats["confidence"] = (float)(1.0 - stats["magnitude_std"] / stats["mean_magnitude"]);
+
+        return stats;
+    }
+}
+
+---
+
+The InverseFlowField class implements a sophisticated mechanism for reverse reasoning in the SPN architecture. Here are the key technical components:
+
+Core Fields:
+
+inverseVectorField: Stores direction vectors pointing backward through state space
+flowStrengthField: Captures magnitude of backward flow at each point
+
+
+Vector Field Initialization and Normalization:
+
+Randomly initializes inverse vectors in N-dimensional space
+Normalizes vectors to unit length to ensure consistent directionality
+Initializes uniform flow strength distribution
+
+
+Backward Routing Mechanism:
+
+Computes similarity between current state and inverse vectors
+Applies softmax to generate routing probabilities
+Weights routes by flow strength
+Calculates confidence based on entropy of routing distribution
+
+
+Previous State Inference:
+
+Identifies top K most probable previous positions
+Generates previous states using inverse transformations
+Returns both states and their probabilities
+
+
+Forward-Inverse Field Synchronization:
+
+Updates inverse vectors based on forward field
+Maintains consistency between forward and backward flows
+Uses momentum-based updates for flow strength
+
+
+Metrics and Analysis:
+
+Tracks average flow strength
+Measures directional coherence
+Calculates field statistics (magnitudes, variance, confidence)
+
+
+
+This component enables the SPN to:
+
+Reason backwards from effects to causes
+Infer probable previous states
+Maintain consistent bidirectional flow through belief space
+
+The inverse flow field is essential for:
+
+Causal inference
+Belief excavation
+Narrative reconstruction
+Debugging decision paths
