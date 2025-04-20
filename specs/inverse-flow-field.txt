@@ -1,0 +1,285 @@
+using ParallelReverseAutoDiff.PRAD;
+
+public class InverseFlowField
+{
+    private readonly int[] fieldShape;
+    private readonly int vectorDim;
+    private readonly int contextDim;
+    
+    // Core fields
+    private PradOp inverseVectorField;
+    private PradOp flowStrengthField;
+    
+    // Dynamic state warping components
+    private PradOp warpingNetwork;
+    private PradOp contextEncoder;
+    private PradOp temporalSmoother;
+
+    public class InverseTransformationState 
+    {
+        public PradResult WarpedState { get; init; }
+        public PradResult ContextualRouting { get; init; }
+        public float TemporalSmoothness { get; init; }
+        public Dictionary<string, float> ConfidenceMetrics { get; init; }
+    }
+
+    private class WarpingModule
+    {
+        private readonly PradOp fc1;
+        private readonly PradOp fc2;
+        private readonly PradOp attention;
+
+        public WarpingModule(int inputDim, int hiddenDim)
+        {
+            // Multi-layer warping network with attention
+            fc1 = new PradOp(InitializeWeights(inputDim, hiddenDim));
+            fc2 = new PradOp(InitializeWeights(hiddenDim, inputDim));
+            attention = new PradOp(InitializeWeights(hiddenDim, hiddenDim));
+        }
+
+        public PradResult WarpState(PradOp state, PradOp context)
+        {
+            // Non-linear transformation with attention
+            var hidden = state.MatMul(fc1)
+                .Then(PradOp.LeakyReLUOp);
+
+            // Apply context-aware attention
+            var attentionWeights = hidden.MatMul(attention)
+                .Then(weights => weights.MatMul(context.Transpose().Result))
+                .Then(PradOp.SoftmaxOp);
+
+            var attentionOutput = attentionWeights.MatMul(context.Result);
+            
+            // Combine and project back
+            return hidden.Add(attentionOutput.Result)
+                .Then(combined => combined.MatMul(fc2.Result))
+                .Then(PradOp.TanhOp);  // Bounded output
+        }
+    }
+
+    public class TemporalRegularizer 
+    {
+        private readonly Queue<Tensor> stateHistory;
+        private readonly int historyLength;
+        private readonly float smoothnessThreshold;
+
+        public TemporalRegularizer(int historyLength = 10, float smoothnessThreshold = 0.5f)
+        {
+            this.historyLength = historyLength;
+            this.smoothnessThreshold = smoothnessThreshold;
+            stateHistory = new Queue<Tensor>();
+        }
+
+        public (float smoothness, float confidence) AnalyzeTransition(Tensor currentState, Tensor previousState)
+        {
+            // Add to history
+            stateHistory.Enqueue(currentState);
+            if (stateHistory.Count > historyLength)
+                stateHistory.Dequeue();
+
+            // Calculate transition smoothness
+            float transitionMagnitude = CalculateTransitionMagnitude(currentState, previousState);
+            float historicalAverage = CalculateHistoricalAverage();
+            float smoothness = 1.0f / (1.0f + Math.Abs(transitionMagnitude - historicalAverage));
+
+            // Calculate confidence based on smoothness
+            float confidence = smoothness > smoothnessThreshold ? 
+                smoothness : smoothness * (smoothness / smoothnessThreshold);
+
+            return (smoothness, confidence);
+        }
+
+        private float CalculateTransitionMagnitude(Tensor current, Tensor previous)
+        {
+            float sumSquaredDiff = 0;
+            for (int i = 0; i < current.Data.Length; i++)
+            {
+                float diff = (float)(current.Data[i] - previous.Data[i]);
+                sumSquaredDiff += diff * diff;
+            }
+            return (float)Math.Sqrt(sumSquaredDiff);
+        }
+
+        private float CalculateHistoricalAverage()
+        {
+            if (stateHistory.Count < 2) return 0;
+
+            float sum = 0;
+            var states = stateHistory.ToArray();
+            for (int i = 1; i < states.Length; i++)
+            {
+                sum += CalculateTransitionMagnitude(states[i], states[i-1]);
+            }
+            return sum / (states.Length - 1);
+        }
+    }
+
+    public InverseTransformationState GeneratePreviousStateWithContext(
+        PradOp currentState,
+        PradOp context,
+        TemporalRegularizer temporalRegularizer)
+    {
+        // 1. Apply dynamic state warping
+        var warpedState = warpingNetwork.WarpState(currentState, context);
+
+        // 2. Get context-aware routing
+        var contextualRouting = ComputeContextualRouting(warpedState, context);
+
+        // 3. Apply inverse transformation
+        var previousState = ApplyInverseTransformation(warpedState, contextualRouting);
+
+        // 4. Check temporal smoothness
+        var (smoothness, confidence) = temporalRegularizer.AnalyzeTransition(
+            previousState.Result,
+            currentState.Result);
+
+        // 5. Calculate confidence metrics
+        var metrics = new Dictionary<string, float>
+        {
+            ["warping_confidence"] = CalculateWarpingConfidence(warpedState),
+            ["routing_confidence"] = CalculateRoutingConfidence(contextualRouting),
+            ["temporal_confidence"] = confidence,
+            ["overall_confidence"] = CombineConfidences(warpedState, contextualRouting, confidence)
+        };
+
+        return new InverseTransformationState
+        {
+            WarpedState = warpedState,
+            ContextualRouting = contextualRouting,
+            TemporalSmoothness = smoothness,
+            ConfidenceMetrics = metrics
+        };
+    }
+
+    private PradResult ComputeContextualRouting(PradResult warpedState, PradOp context)
+    {
+        // Encode context
+        var encodedContext = contextEncoder.MatMul(context)
+            .Then(PradOp.LeakyReLUOp);
+
+        // Compute attention between warped state and context
+        var attention = warpedState.Then(state => 
+            state.MatMul(encodedContext.Result.Transpose()))
+            .Then(PradOp.SoftmaxOp);
+
+        // Weight inverse vectors by attention
+        return attention.Then(a => 
+            a.MatMul(inverseVectorField.Result));
+    }
+
+    private PradResult ApplyInverseTransformation(
+        PradResult warpedState,
+        PradResult contextualRouting)
+    {
+        // Combine warped state with routing
+        var combined = warpedState.Then(state =>
+            state.ElementwiseMultiply(contextualRouting.Result));
+
+        // Apply non-linear transformation
+        return combined.Then(PradOp.LeakyReLUOp)
+            .Then(transformed => transformed.MatMul(
+                inverseVectorField.Transpose().Result));
+    }
+
+    private float CalculateWarpingConfidence(PradResult warpedState)
+    {
+        // Calculate stability of warping transformation
+        return warpedState.Then(state => {
+            var variance = state.Then(PradOp.SquareOp)
+                .Then(PradOp.MeanOp)
+                .Then(mean => mean.Sub(
+                    state.Then(PradOp.MeanOp)
+                    .Then(PradOp.SquareOp).Result));
+            return new PradOp(new Tensor(variance.Result.Shape, 1.0))
+                .Sub(variance.Result);
+        }).Result.Data[0];
+    }
+
+    private float CalculateRoutingConfidence(PradResult routing)
+    {
+        // Calculate entropy of routing distribution
+        return routing.Then(r => {
+            var entropy = r.Then(PradOp.LnOp)
+                .Then(ln => ln.ElementwiseMultiply(r.Result))
+                .Then(PradOp.MeanOp);
+            return new PradOp(new Tensor(entropy.Result.Shape, 1.0))
+                .Sub(entropy.Result);
+        }).Result.Data[0];
+    }
+
+    private float CombineConfidences(
+        PradResult warpedState,
+        PradResult routing,
+        float temporalConfidence)
+    {
+        float warpingConf = CalculateWarpingConfidence(warpedState);
+        float routingConf = CalculateRoutingConfidence(routing);
+
+        // Weighted combination of confidence metrics
+        return 0.4f * warpingConf +
+               0.4f * routingConf +
+               0.2f * temporalConfidence;
+    }
+
+    private Tensor InitializeWeights(int inputDim, int outputDim)
+    {
+        var weights = new double[inputDim * outputDim];
+        var random = new Random();
+        var stddev = Math.Sqrt(2.0 / (inputDim + outputDim));
+
+        for (int i = 0; i < weights.Length; i++)
+        {
+            weights[i] = random.NextGaussian(0, stddev);
+        }
+
+        return new Tensor(new[] { inputDim, outputDim }, weights);
+    }
+}
+
+---
+
+The enhanced implementation adds three major capabilities:
+
+Dynamic State-Warped Inversion:
+
+
+Introduces a WarpingModule with non-linear transformations
+Uses attention mechanisms to condition warping on context
+Learns curved reversals through latent space rather than simple linear negation
+Provides confidence metrics for warping stability
+
+
+Context-Aware Reversal:
+
+
+Implements contextEncoder for processing contextual information
+Uses attention between warped states and context
+Generates contextual routing probabilities
+Weights inverse transformations by contextual relevance
+
+
+Temporal Regularization:
+
+
+Adds TemporalRegularizer class that:
+
+Maintains history of state transitions
+Calculates transition smoothness
+Adjusts confidence based on temporal consistency
+Detects anomalous transitions
+
+
+
+The key innovation here is moving from simple vector negation to learned non-linear transformations that can:
+
+Handle curved belief trajectories
+Account for contextual ambiguity
+Detect and adjust for temporal inconsistencies
+Provide detailed confidence metrics for introspection
+
+This enables much more sophisticated reverse reasoning, allowing the system to:
+
+Infer complex causal histories
+Handle ambiguous or multi-causal situations
+Detect and handle hallucinated or inconsistent states
+Provide explainable confidence measures
