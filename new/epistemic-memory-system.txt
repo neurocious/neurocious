@@ -1,0 +1,480 @@
+using ParallelReverseAutoDiff.PRAD;
+using System.Collections.Concurrent;
+
+public class EpistemicMemorySystem
+{
+    private readonly EnhancedVAE vae;
+    private readonly SpatialProbabilityNetwork spn;
+    private readonly InverseFlowField inverseFlow;
+    private readonly BeliefMemoryStore memoryStore;
+    private readonly TemporalRegularizer temporalRegularizer;
+    
+    private readonly float convictionThreshold = 0.3f;
+    private readonly float minimumRetentionScore = 0.1f;
+    private readonly TimeSpan memoryUpdateInterval = TimeSpan.FromMinutes(5);
+
+    public class BeliefMemoryCell
+    {
+        public string BeliefId { get; set; }
+        public float[] LatentVector { get; set; }
+        public FieldParameters FieldParams { get; set; }
+        public float Conviction { get; set; }
+        public DateTime Created { get; set; }
+        public DateTime LastAccessed { get; set; }
+        public HashSet<string> NarrativeContexts { get; set; }
+        public float DecayRate { get; set; }
+        public Dictionary<string, float> MetaParameters { get; set; }
+        public List<string> CausalAntecedents { get; set; }
+        public List<string> CausalConsequences { get; set; }
+
+        public float RetentionScore => 
+            Conviction * (1.0f / (1.0f + DecayRate)) * 
+            Math.Max(0.1f, MetaParameters.GetValueOrDefault("narrative_coherence", 1.0f));
+
+        public BeliefMemoryCell Clone()
+        {
+            return new BeliefMemoryCell
+            {
+                BeliefId = BeliefId,
+                LatentVector = LatentVector.ToArray(),
+                FieldParams = FieldParams,
+                Conviction = Conviction,
+                Created = Created,
+                LastAccessed = LastAccessed,
+                NarrativeContexts = new HashSet<string>(NarrativeContexts),
+                DecayRate = DecayRate,
+                MetaParameters = new Dictionary<string, float>(MetaParameters),
+                CausalAntecedents = new List<string>(CausalAntecedents),
+                CausalConsequences = new List<string>(CausalConsequences)
+            };
+        }
+    }
+
+    public class BeliefMemoryStore
+    {
+        private readonly ConcurrentDictionary<string, BeliefMemoryCell> memory;
+        private readonly ConcurrentDictionary<string, HashSet<string>> narrativeIndex;
+        private readonly ConcurrentDictionary<string, float> beliefDriftMetrics;
+
+        public BeliefMemoryStore()
+        {
+            memory = new ConcurrentDictionary<string, BeliefMemoryCell>();
+            narrativeIndex = new ConcurrentDictionary<string, HashSet<string>>();
+            beliefDriftMetrics = new ConcurrentDictionary<string, float>();
+        }
+
+        public void Store(BeliefMemoryCell belief)
+        {
+            // Store belief
+            if (memory.TryGetValue(belief.BeliefId, out var existingBelief))
+            {
+                // Track drift if updating existing belief
+                TrackBeliefDrift(existingBelief, belief);
+            }
+
+            memory[belief.BeliefId] = belief;
+
+            // Update narrative indices
+            foreach (var context in belief.NarrativeContexts)
+            {
+                narrativeIndex.AddOrUpdate(
+                    context,
+                    new HashSet<string> { belief.BeliefId },
+                    (_, existing) => 
+                    {
+                        existing.Add(belief.BeliefId);
+                        return existing;
+                    });
+            }
+        }
+
+        private void TrackBeliefDrift(BeliefMemoryCell old, BeliefMemoryCell @new)
+        {
+            float drift = CalculateVectorDrift(old.LatentVector, @new.LatentVector);
+            beliefDriftMetrics[@new.BeliefId] = drift;
+        }
+
+        private float CalculateVectorDrift(float[] v1, float[] v2)
+        {
+            float sumSquaredDiff = 0;
+            for (int i = 0; i < v1.Length; i++)
+            {
+                float diff = v1[i] - v2[i];
+                sumSquaredDiff += diff * diff;
+            }
+            return (float)Math.Sqrt(sumSquaredDiff);
+        }
+
+        public BeliefMemoryCell Retrieve(string beliefId)
+        {
+            if (memory.TryGetValue(beliefId, out var cell))
+            {
+                cell.LastAccessed = DateTime.UtcNow;
+                return cell.Clone();
+            }
+            return null;
+        }
+
+        public List<BeliefMemoryCell> QueryByNarrative(
+            string context, 
+            float minConviction = 0.3f,
+            int maxResults = 10)
+        {
+            if (!narrativeIndex.TryGetValue(context, out var beliefIds))
+                return new List<BeliefMemoryCell>();
+
+            return beliefIds
+                .Select(id => memory[id])
+                .Where(b => b.Conviction >= minConviction)
+                .OrderByDescending(b => b.RetentionScore)
+                .Take(maxResults)
+                .Select(b => b.Clone())
+                .ToList();
+        }
+
+        public void PruneMemory(float minRetention)
+        {
+            var toRemove = memory.Values
+                .Where(b => b.RetentionScore < minRetention)
+                .Select(b => b.BeliefId)
+                .ToList();
+
+            foreach (var id in toRemove)
+            {
+                if (memory.TryRemove(id, out var cell))
+                {
+                    // Remove from narrative indices
+                    foreach (var context in cell.NarrativeContexts)
+                    {
+                        if (narrativeIndex.TryGetValue(context, out var beliefs))
+                        {
+                            beliefs.Remove(id);
+                        }
+                    }
+                }
+            }
+        }
+
+        public float GetBeliefDrift(string beliefId)
+        {
+            return beliefDriftMetrics.GetValueOrDefault(beliefId, 0f);
+        }
+    }
+
+    public class MemoryRetrievalResult
+    {
+        public BeliefMemoryCell MainBelief { get; init; }
+        public List<BeliefMemoryCell> RelatedBeliefs { get; init; }
+        public float TemporalCoherence { get; init; }
+        public Dictionary<string, float> RetrievalMetrics { get; init; }
+    }
+
+    public async Task<BeliefMemoryCell> FormBelief(PradOp input)
+    {
+        // 1. Encode through VAE
+        var (mean, logVar) = vae.EncodeSequence(new List<PradOp> { input });
+        var latentVector = ReparameterizationTrick(mean, logVar);
+
+        // 2. Get field parameters
+        var fieldParams = vae.ExtractFieldParameters(latentVector.Result);
+
+        // 3. Route through SPN for belief context
+        var (routing, policy, reflexes, predictions) = 
+            spn.ProcessState(new PradOp(latentVector.Result));
+
+        // 4. Create memory cell
+        var beliefCell = new BeliefMemoryCell
+        {
+            BeliefId = Guid.NewGuid().ToString(),
+            LatentVector = latentVector.Result.Data,
+            FieldParams = fieldParams,
+            Conviction = CalculateInitialConviction(routing.Result, fieldParams),
+            Created = DateTime.UtcNow,
+            LastAccessed = DateTime.UtcNow,
+            NarrativeContexts = ExtractNarrativeContexts(routing.Result, policy.Result),
+            DecayRate = CalculateInitialDecayRate(fieldParams),
+            MetaParameters = new Dictionary<string, float>
+            {
+                ["narrative_coherence"] = CalculateNarrativeCoherence(routing.Result),
+                ["prediction_confidence"] = CalculatePredictionConfidence(predictions.Result),
+                ["reflex_activation"] = CalculateReflexActivation(reflexes.Result)
+            },
+            CausalAntecedents = await InferCausalAntecedents(latentVector.Result),
+            CausalConsequences = await PredictCausalConsequences(latentVector.Result)
+        };
+
+        // 5. Store if conviction meets threshold
+        if (beliefCell.Conviction >= convictionThreshold)
+        {
+            memoryStore.Store(beliefCell);
+        }
+
+        return beliefCell;
+    }
+
+    public async Task<MemoryRetrievalResult> RevisitBelief(string beliefId, PradOp currentContext)
+    {
+        var mainBelief = memoryStore.Retrieve(beliefId);
+        if (mainBelief == null) return null;
+
+        // Get related beliefs through narrative contexts
+        var relatedBeliefs = mainBelief.NarrativeContexts
+            .SelectMany(context => memoryStore.QueryByNarrative(context))
+            .Distinct()
+            .ToList();
+
+        // Use inverse flow field to validate temporal coherence
+        var temporalCoherence = await ValidateBeliefCoherence(
+            mainBelief, 
+            relatedBeliefs,
+            currentContext);
+
+        // Update belief if necessary
+        if (temporalCoherence > 0.7f)
+        {
+            await ReinforceBeliefMemory(mainBelief);
+        }
+        else
+        {
+            await WeakenBeliefMemory(mainBelief);
+        }
+
+        return new MemoryRetrievalResult
+        {
+            MainBelief = mainBelief,
+            RelatedBeliefs = relatedBeliefs,
+            TemporalCoherence = temporalCoherence,
+            RetrievalMetrics = new Dictionary<string, float>
+            {
+                ["belief_drift"] = memoryStore.GetBeliefDrift(beliefId),
+                ["retrieval_confidence"] = CalculateRetrievalConfidence(
+                    mainBelief, temporalCoherence),
+                ["narrative_alignment"] = CalculateNarrativeAlignment(
+                    mainBelief, currentContext.Result)
+            }
+        };
+    }
+
+    private async Task<float> ValidateBeliefCoherence(
+        BeliefMemoryCell belief,
+        List<BeliefMemoryCell> related,
+        PradOp currentContext)
+    {
+        // Use inverse flow to check temporal consistency
+        var inverseState = inverseFlow.GeneratePreviousStateWithContext(
+            new PradOp(new Tensor(belief.LatentVector)),
+            currentContext,
+            temporalRegularizer);
+
+        // Check temporal coherence
+        float temporalScore = inverseState.TemporalSmoothness;
+
+        // Check narrative consistency
+        float narrativeScore = CalculateNarrativeConsistency(
+            belief, related, currentContext.Result);
+
+        // Combine scores
+        return 0.6f * temporalScore + 0.4f * narrativeScore;
+    }
+
+    private async Task ReinforceBeliefMemory(BeliefMemoryCell belief)
+    {
+        // Strengthen conviction
+        belief.Conviction = Math.Min(1.0f, belief.Conviction * 1.1f);
+
+        // Reduce decay rate
+        belief.DecayRate *= 0.9f;
+
+        // Update memory
+        memoryStore.Store(belief);
+    }
+
+    private async Task WeakenBeliefMemory(BeliefMemoryCell belief)
+    {
+        // Weaken conviction
+        belief.Conviction *= 0.9f;
+
+        // Increase decay rate
+        belief.DecayRate *= 1.1f;
+
+        // Update memory
+        memoryStore.Store(belief);
+
+        // If retention score too low, memory may be pruned in next cleanup
+    }
+
+    public class MemoryAnalytics
+    {
+        public Dictionary<string, float> RetentionCurve { get; init; }
+        public Dictionary<string, float> BeliefDrift { get; init; }
+        public List<(string belief1, string belief2, float tension)> CognitiveDissonance { get; init; }
+        public Dictionary<string, List<string>> NarrativeThreads { get; init; }
+    }
+
+    public MemoryAnalytics AnalyzeMemorySystem()
+    {
+        var analysis = new MemoryAnalytics
+        {
+            RetentionCurve = CalculateRetentionCurve(),
+            BeliefDrift = CalculateBeliefDrift(),
+            CognitiveDissonance = DetectCognitiveDissonance(),
+            NarrativeThreads = MapNarrativeThreads()
+        };
+
+        return analysis;
+    }
+
+    private Dictionary<string, float> CalculateRetentionCurve()
+    {
+        var now = DateTime.UtcNow;
+        var curve = new Dictionary<string, float>();
+
+        foreach (var belief in memoryStore.QueryByNarrative("*", 0))
+        {
+            var age = (now - belief.Created).TotalHours;
+            var ageKey = $"{Math.Floor(age)}h";
+
+            if (!curve.ContainsKey(ageKey))
+                curve[ageKey] = 0;
+
+            curve[ageKey] = Math.Max(curve[ageKey], belief.RetentionScore);
+        }
+
+        return curve;
+    }
+
+    private Dictionary<string, float> CalculateBeliefDrift()
+    {
+        return memoryStore.QueryByNarrative("*", 0)
+            .ToDictionary(
+                b => b.BeliefId,
+                b => memoryStore.GetBeliefDrift(b.BeliefId));
+    }
+
+    private List<(string, string, float)> DetectCognitiveDissonance()
+    {
+        var dissonance = new List<(string, string, float)>();
+        var beliefs = memoryStore.QueryByNarrative("*", 0);
+
+        for (int i = 0; i < beliefs.Count; i++)
+        {
+            for (int j = i + 1; j < beliefs.Count; j++)
+            {
+                var tension = CalculateBeliefTension(beliefs[i], beliefs[j]);
+                if (tension > 0.7f) // High tension threshold
+                {
+                    dissonance.Add((beliefs[i].BeliefId, beliefs[j].BeliefId, tension));
+                }
+            }
+        }
+
+        return dissonance;
+    }
+
+    private float CalculateBeliefTension(BeliefMemoryCell b1, BeliefMemoryCell b2)
+    {
+        // Calculate semantic opposition
+        float vectorOpposition = -CosineSimilarity(b1.LatentVector, b2.LatentVector);
+
+        // Calculate field parameter tension
+        float fieldTension = CalculateFieldTension(b1.FieldParams, b2.FieldParams);
+
+        // Calculate narrative conflict
+        float narrativeConflict = CalculateNarrativeConflict(
+            b1.NarrativeContexts, 
+            b2.NarrativeContexts);
+
+        return (vectorOpposition + fieldTension + narrativeConflict) / 3;
+    }
+
+    private float CosineSimilarity(float[] v1, float[] v2)
+    {
+        float dotProduct = 0;
+        float norm1 = 0;
+        float norm2 = 0;
+
+        for (int i = 0; i < v1.Length; i++)
+        {
+            dotProduct += v1[i] * v2[i];
+            norm1 += v1[i] * v1[i];
+            norm2 += v2[i] * v2[i];
+        }
+
+        return dotProduct / ((float)Math.Sqrt(norm1) * (float)Math.Sqrt(norm2));
+    }
+
+    private Dictionary<string, List<string>> MapNarrativeThreads()
+    {
+        var threads = new Dictionary<string, List<string>>();
+        var beliefs = memoryStore.QueryByNarrative("*", 0);
+
+        foreach (var belief in beliefs)
+        {
+            foreach (var context in belief.NarrativeContexts)
+            {
+                if (!threads.ContainsKey(context))
+                    threads[context] = new List<string>();
+
+                threads[context].Add(belief.BeliefId);
+            }
+        }
+
+        // Sort each thread by creation time
+        foreach (var thread in threads.Values)
+        {
+            thread.Sort((a, b) => 
+                memoryStore.Retrieve(a).Created.CompareTo(
+                    memoryStore.Retrieve(b).Created));
+        }
+
+        return threads;
+    }
+}
+
+===
+
+I've implemented a comprehensive Epistemic Memory System that integrates with the SPN-VAE architecture. Key features include:
+
+Dynamic Memory Cells:
+
+
+Rich epistemic metadata tracking
+Conviction and decay mechanics
+Narrative context associations
+Causal relationships tracking
+
+
+Memory Store:
+
+
+Concurrent belief storage
+Narrative indexing
+Belief drift tracking
+Efficient retrieval mechanisms
+
+
+Belief Formation Pipeline:
+
+
+VAE encoding
+Field parameter extraction
+Conviction-based retention
+Narrative context extraction
+
+
+Memory Dynamics:
+
+
+Temporal coherence validation
+Belief reinforcement/weakening
+Decay rate modulation
+Narrative consistency checking
+
+
+Analytics:
+
+
+Retention curve visualization
+Belief drift detection
+Cognitive dissonance detection
+Narrative thread mapping
