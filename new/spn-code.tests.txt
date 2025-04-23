@@ -1,0 +1,1407 @@
+using Xunit;
+using ParallelReverseAutoDiff.PRAD;
+using System;
+using System.Linq;
+
+// Mock class for testing
+public class MockEnhancedVAE : EnhancedVAE
+{
+    public PradOp Encode(PradOp input)
+    {
+        // Simple mock encoding - just pass through with minor transformation
+        return input.Then(x => x.Mul(new Tensor(x.Result.Shape, 0.9)));
+    }
+
+    public PradOp Decode(PradOp latent)
+    {
+        // Simple mock decoding - inverse of encoding
+        return latent.Then(x => x.Mul(new Tensor(x.Result.Shape, 1.1)));
+    }
+}
+
+public class SpatialProbabilityNetworkTests
+{
+    private const float EPSILON = 1e-6f; // For floating point comparisons
+    private readonly EnhancedVAE mockVae;
+    private readonly SpatialProbabilityNetwork spn;
+
+    public SpatialProbabilityNetworkTests()
+    {
+        // Setup mock VAE
+        mockVae = new MockEnhancedVAE();
+        
+        // Initialize SPN with standard test dimensions
+        spn = new SpatialProbabilityNetwork(
+            vae: mockVae,
+            stateDim: 10,
+            fieldShape: new[] { 16, 16 },
+            vectorDim: 4,
+            bufferSize: 5
+        );
+    }
+
+    [Fact]
+    public void Constructor_InitializesWithDefaultParameters()
+    {
+        var testSpn = new SpatialProbabilityNetwork();
+        Assert.NotNull(testSpn);
+        
+        // Access fields through reflection to verify initialization
+        var fieldShape = GetPrivateField<int[]>(testSpn, "fieldShape");
+        var vectorDim = GetPrivateField<int>(testSpn, "vectorDim");
+        var bufferSize = GetPrivateField<int>(testSpn, "bufferSize");
+        var stateDim = GetPrivateField<int>(testSpn, "stateDim");
+
+        Assert.Equal(new[] { 32, 32 }, fieldShape);
+        Assert.Equal(8, vectorDim);
+        Assert.Equal(10, bufferSize);
+        Assert.Equal(20, stateDim);
+    }
+
+    [Theory]
+    [InlineData(10, new[] { 16, 16 }, 4, 5)]
+    [InlineData(15, new[] { 24, 24 }, 6, 8)]
+    [InlineData(25, new[] { 40, 40 }, 10, 12)]
+    public void Constructor_InitializesWithCustomParameters(
+        int stateDim, int[] fieldShape, int vectorDim, int bufferSize)
+    {
+        // Act
+        var testSpn = new SpatialProbabilityNetwork(
+            stateDim: stateDim,
+            fieldShape: fieldShape,
+            vectorDim: vectorDim,
+            bufferSize: bufferSize
+        );
+
+        // Assert
+        Assert.NotNull(testSpn);
+        Assert.Equal(fieldShape, GetPrivateField<int[]>(testSpn, "fieldShape"));
+        Assert.Equal(vectorDim, GetPrivateField<int>(testSpn, "vectorDim"));
+        Assert.Equal(bufferSize, GetPrivateField<int>(testSpn, "bufferSize"));
+        Assert.Equal(stateDim, GetPrivateField<int>(testSpn, "stateDim"));
+    }
+
+    [Theory]
+    [InlineData(0)]  // Zero dimensions
+    [InlineData(-1)] // Negative dimensions
+    public void Constructor_ThrowsOnInvalidDimensions(int invalidDim)
+    {
+        Assert.Throws<ArgumentException>(() => 
+            new SpatialProbabilityNetwork(stateDim: invalidDim));
+    }
+
+    [Fact]
+    public void ProcessState_ReturnsValidOutput()
+    {
+        // Arrange
+        var state = CreateRandomState(10);
+
+        // Act
+        var (routing, confidence, policy, reflexes, predictions, fieldParams) = spn.ProcessState(state);
+
+        // Assert - Basic validation
+        Assert.NotNull(routing);
+        Assert.NotNull(confidence);
+        Assert.NotNull(policy);
+        Assert.NotNull(reflexes);
+        Assert.NotNull(predictions);
+        Assert.NotNull(fieldParams);
+        Assert.Equal(16 * 16, routing.Result.Data.Length); // Based on field shape
+        Assert.Single(confidence.Result.Data);
+        Assert.Equal(10, policy.Result.Data.Length);      // 10 governance parameters
+        Assert.Equal(5, reflexes.Result.Data.Length);     // 5 reflex controls
+        Assert.Equal(4, predictions.Result.Data.Length);  // value, confidence, upper, lower bounds
+
+        // Assert - Value ranges
+        Assert.InRange(confidence.Result.Data[0], 0, 1);
+        Assert.InRange(fieldParams.Entropy, 0, float.MaxValue);
+        Assert.InRange(fieldParams.Curvature, 0, float.MaxValue);
+        Assert.InRange(Math.Abs(fieldParams.Alignment), 0, 1);
+
+        // Assert - Neural outputs
+        Assert.All(policy.Result.Data, p => Assert.InRange(p, 0, 1));
+        Assert.All(reflexes.Result.Data, r => Assert.InRange(r, 0, 1));
+        Assert.All(predictions.Result.Data, p => Assert.InRange(p, float.MinValue, float.MaxValue));
+
+        // Assert - Probability distribution properties
+        Assert.True(Math.Abs(routing.Result.Data.Sum() - 1.0) < EPSILON);
+        Assert.All(routing.Result.Data, prob => Assert.InRange(prob, 0, 1));
+    }
+
+    [Fact]
+    public void ProcessState_ConsistentWithSameInput()
+    {
+        // Arrange
+        var state = CreateRandomState(10);
+
+        // Act
+        var (routing1, confidence1, policy1, reflexes1, predictions1, fieldParams1) = spn.ProcessState(state);
+        var (routing2, confidence2, policy2, reflexes2, predictions2, fieldParams2) = spn.ProcessState(state);
+
+        // Assert - Core components
+        Assert.Equal(routing1.Result.Data, routing2.Result.Data, new FloatArrayComparer(EPSILON));
+        Assert.Equal(confidence1.Result.Data[0], confidence2.Result.Data[0], EPSILON);
+        AssertFieldParamsEqual(fieldParams1, fieldParams2);
+
+        // Assert - Neural components
+        Assert.Equal(policy1.Result.Data, policy2.Result.Data, new FloatArrayComparer(EPSILON));
+        Assert.Equal(reflexes1.Result.Data, reflexes2.Result.Data, new FloatArrayComparer(EPSILON));
+        Assert.Equal(predictions1.Result.Data, predictions2.Result.Data, new FloatArrayComparer(EPSILON));
+    }
+
+    [Fact]
+    public void ProcessState_DifferentForDifferentInputs()
+    {
+        // Arrange
+        var state1 = CreateRandomState(10);
+        var state2 = CreateRandomState(10);
+
+        // Act
+        var (routing1, _, policy1, reflexes1, predictions1, _) = spn.ProcessState(state1);
+        var (routing2, _, policy2, reflexes2, predictions2, _) = spn.ProcessState(state2);
+
+        // Assert - Different states should produce different outputs
+        Assert.NotEqual(routing1.Result.Data, routing2.Result.Data, new FloatArrayComparer(EPSILON));
+        Assert.NotEqual(policy1.Result.Data, policy2.Result.Data, new FloatArrayComparer(EPSILON));
+        Assert.NotEqual(reflexes1.Result.Data, reflexes2.Result.Data, new FloatArrayComparer(EPSILON));
+        Assert.NotEqual(predictions1.Result.Data, predictions2.Result.Data, new FloatArrayComparer(EPSILON));
+    }
+
+    [Fact]
+    public void ProcessState_VaeIntegration()
+    {
+        // Arrange
+        var state = CreateRandomState(10);
+        var expectedEncoding = mockVae.Encode(new PradOp(state.Result));
+
+        // Act
+        var (routing1, _, _, _, _, _) = spn.ProcessState(state);
+        var (routing2, _, _, _, _, _) = spn.ProcessState(expectedEncoding);
+
+        // Assert - Routing should be similar whether through VAE or direct
+        var similarity = CalculateCosineSimilarity(
+            routing1.Result.Data, 
+            routing2.Result.Data
+        );
+        Assert.True(similarity > 0.9); // High similarity expected
+    }
+
+    [Fact]
+    public void ProcessState_HandlesZeroState()
+    {
+        // Arrange
+        var zeroState = new PradOp(new Tensor(new[] { 10 }, new double[10]));
+
+        // Act
+        var (routing, confidence, policy, reflexes, predictions, fieldParams) = spn.ProcessState(zeroState);
+
+        // Assert - Core outputs
+        Assert.NotNull(routing);
+        Assert.True(Math.Abs(routing.Result.Data.Sum() - 1.0) < EPSILON);
+        Assert.True(confidence.Result.Data[0] >= 0);
+        Assert.True(fieldParams.Entropy >= 0);
+
+        // Assert - Neural outputs
+        Assert.True(policy.Result.Data.All(p => p >= 0 && p <= 1));
+        Assert.True(reflexes.Result.Data.All(r => r >= 0 && r <= 1));
+        Assert.NotNull(predictions);
+    }
+
+    [Fact]
+    public void PolicyNetwork_AttentionMechanism()
+    {
+        // Arrange - Create sequence of related states
+        var states = new List<PradOp>();
+        var baseState = CreateRandomState(10);
+        for (int i = 0; i < 5; i++)
+        {
+            states.Add(CreatePerturbedState(baseState, 0.1f * i));
+        }
+
+        // Feed sequence to SPN
+        foreach (var state in states)
+        {
+            spn.ProcessState(state);
+        }
+
+        // Act - Get policy for final state
+        var (_, _, policy1, _, _, _) = spn.ProcessState(states.Last());
+        
+        // Clear history and get policy without context
+        spn.ClearTemporalBuffer();
+        var (_, _, policy2, _, _, _) = spn.ProcessState(states.Last());
+
+        // Assert - Policy should differ with and without temporal context
+        Assert.NotEqual(policy1.Result.Data, policy2.Result.Data, new FloatArrayComparer(EPSILON));
+    }
+
+    [Fact]
+    public void ReflexNetwork_EmergencyResponse()
+    {
+        // Arrange
+        var normalState = CreateRandomState(10, 0.5f);
+        var extremeState = CreateRandomState(10, 5.0f);  // High magnitude state
+
+        // Act
+        var (_, _, _, reflexes1, _, _) = spn.ProcessState(normalState);
+        var (_, _, _, reflexes2, _, _) = spn.ProcessState(extremeState);
+
+        // Assert - Stronger activation for extreme state
+        var activation1 = reflexes1.Result.Data.Max();
+        var activation2 = reflexes2.Result.Data.Max();
+        Assert.True(activation2 > activation1);
+    }
+
+    [Fact]
+    public void PredictionNetwork_ForecastingAccuracy()
+    {
+        // Arrange - Create trending sequence
+        var states = new List<PradOp>();
+        var trend = CreateRandomState(10, 0.1f);
+        for (int i = 0; i < 5; i++)
+        {
+            states.Add(new PradOp(
+                baseState.Add(trend.Mul(new Tensor(trend.CurrentShape, i)).Result).Result
+            ));
+        }
+
+        // Feed sequence except last state
+        foreach (var state in states.Take(4))
+        {
+            spn.ProcessState(state);
+        }
+
+        // Act - Get prediction
+        var (_, _, _, _, predictions, _) = spn.ProcessState(states[3]);
+
+        // Assert - Prediction bounds should contain actual value
+        var actualValue = CalculateStateValue(states[4]);
+        var predictedValue = predictions.Result.Data[0];
+        var upperBound = predictedValue + predictions.Result.Data[2];
+        var lowerBound = predictedValue - predictions.Result.Data[3];
+
+        Assert.True(actualValue >= lowerBound && actualValue <= upperBound);
+    }
+
+    [Fact]
+    public void UpdateFields_ModifiesParameters()
+    {
+        // Arrange
+        var state = CreateRandomState(10);
+        var reward = new PradOp(new Tensor(new[] { 1 }, new[] { 0.5 }));
+        var (routing1, _, policy1, reflexes1, predictions1, fieldParams1) = spn.ProcessState(state);
+
+        // Act
+        spn.UpdateFields(routing1, reward, state);
+        var (routing2, _, policy2, reflexes2, predictions2, fieldParams2) = spn.ProcessState(state);
+
+        // Assert - Field parameters should change
+        Assert.NotEqual(fieldParams1.Curvature, fieldParams2.Curvature);
+        Assert.NotEqual(fieldParams1.Entropy, fieldParams2.Entropy);
+        Assert.NotEqual(fieldParams1.Alignment, fieldParams2.Alignment);
+
+        // Assert - Neural components should adapt
+        Assert.NotEqual(policy1.Result.Data, policy2.Result.Data, new FloatArrayComparer(EPSILON));
+        Assert.NotEqual(reflexes1.Result.Data, reflexes2.Result.Data, new FloatArrayComparer(EPSILON));
+        Assert.NotEqual(predictions1.Result.Data, predictions2.Result.Data, new FloatArrayComparer(EPSILON));
+
+        // Assert - Field validity after update
+        Assert.True(fieldParams2.Curvature >= 0);
+        Assert.True(fieldParams2.Entropy >= 0);
+        Assert.InRange(Math.Abs(fieldParams2.Alignment), 0, 1);
+    }
+
+    [Fact]
+    public void WorldBranching_SimulatesBranches()
+    {
+        // Arrange
+        var state = CreateRandomState(10);
+        var (_, _, _, _, _, fieldParams) = spn.ProcessState(state);
+
+        // Act
+        var branches = spn.SimulateWorldBranches(fieldParams, 3);
+
+        // Assert
+        Assert.Equal(3, branches.Count);
+        Assert.All(branches, b => Assert.NotNull(b.Network));
+        Assert.All(branches, b => Assert.InRange(b.Probability, 0, 1));
+        
+        // Verify branches diverge
+        var branchOutputs = branches.Select(b => {
+            var (routing, _, _, _, _, _) = b.Network.ProcessState(state);
+            return routing.Result.Data;
+        }).ToList();
+
+        // Each branch should produce different routing
+        for (int i = 0; i < branchOutputs.Count; i++)
+        {
+            for (int j = i + 1; j < branchOutputs.Count; j++)
+            {
+                Assert.NotEqual(branchOutputs[i], branchOutputs[j], new FloatArrayComparer(EPSILON));
+            }
+        }
+    }
+
+    [Fact]
+    public void Exploration_AdaptsToNovelty()
+    {
+        // Arrange
+        var state = CreateRandomState(10);
+        var (routing1, confidence1, _, _, _, _) = spn.ProcessState(state);
+
+        // Act - Visit same state multiple times
+        for (int i = 0; i < 5; i++)
+        {
+            spn.ProcessState(state);
+        }
+        var (routing2, confidence2, _, _, _, _) = spn.ProcessState(state);
+
+        // Assert - Confidence should increase and exploration should decrease
+        Assert.True(confidence2.Result.Data[0] > confidence1.Result.Data[0]);
+        
+        var divergence = CalculateRoutingDivergence(routing1, routing2);
+        Assert.True(divergence < EPSILON * 10); // Routing should stabilize
+    }
+
+    [Fact]
+    public void BeliefCoupling_StrengthensCohesion()
+    {
+        // Arrange
+        var state1 = CreateRandomState(10);
+        var state2 = CreatePerturbedState(state1, 0.1f); // Similar state
+        var reward = new PradOp(new Tensor(new[] { 1 }, new[] { 1.0 }));
+
+        // Act - Train on first state
+        var (routing1, _, _, _, _, _) = spn.ProcessState(state1);
+        spn.UpdateFields(routing1, reward, state1);
+
+        // Get response to both states
+        var (routingA, _, _, _, _, _) = spn.ProcessState(state1);
+        var (routingB, _, _, _, _, _) = spn.ProcessState(state2);
+        var initialSimilarity = CalculateCosineSimilarity(routingA.Result.Data, routingB.Result.Data);
+
+        // Apply more updates
+        for (int i = 0; i < 5; i++)
+        {
+            var (r, _, _, _, _, _) = spn.ProcessState(state1);
+            spn.UpdateFields(r, reward, state1);
+        }
+
+        // Get final responses
+        var (routingA2, _, _, _, _, _) = spn.ProcessState(state1);
+        var (routingB2, _, _, _, _, _) = spn.ProcessState(state2);
+        var finalSimilarity = CalculateCosineSimilarity(routingA2.Result.Data, routingB2.Result.Data);
+
+        // Assert - Similar states should become more aligned
+        Assert.True(finalSimilarity > initialSimilarity);
+    }
+
+    [Theory]
+    [InlineData(0.0)]   // No reward
+    [InlineData(0.5)]   // Moderate reward
+    [InlineData(1.0)]   // Maximum reward
+    [InlineData(-0.5)]  // Negative reward
+    public void UpdateFields_HandlesVariousRewards(double rewardValue)
+    {
+        // Arrange
+        var state = CreateRandomState(10);
+        var reward = new PradOp(new Tensor(new[] { 1 }, new[] { rewardValue }));
+        var (routing, _, _) = spn.RouteState(state);
+
+        // Act & Assert
+        var exception = Record.Exception(() => spn.UpdateFields(routing, reward, state));
+        Assert.Null(exception);
+    }
+
+    [Fact]
+    public void UpdateFields_PreservesFieldProperties()
+    {
+        // Arrange
+        var state = CreateRandomState(10);
+        var reward = new PradOp(new Tensor(new[] { 1 }, new[] { 1.0 }));
+        
+        // Act - Multiple updates
+        for (int i = 0; i < 10; i++)
+        {
+            var (routing, _, fieldParams) = spn.RouteState(state);
+            spn.UpdateFields(routing, reward, state);
+
+            // Assert - Field properties remain valid
+            Assert.True(fieldParams.Curvature >= 0);
+            Assert.True(fieldParams.Entropy >= 0);
+            Assert.InRange(Math.Abs(fieldParams.Alignment), 0, 1);
+        }
+    }
+
+    [Fact]
+    public void UpdateFields_LearnsConsistentPatterns()
+    {
+        // Arrange
+        var state = CreateRandomState(10);
+        var reward = new PradOp(new Tensor(new[] { 1 }, new[] { 1.0 }));
+        var initialConfidence = spn.RouteState(state).confidence.Result.Data[0];
+        
+        // Act - Train on same state multiple times
+        for (int i = 0; i < 5; i++)
+        {
+            var (routing, _, _) = spn.RouteState(state);
+            spn.UpdateFields(routing, reward, state);
+        }
+        
+        // Assert - Confidence should increase with consistent positive feedback
+        var finalConfidence = spn.RouteState(state).confidence.Result.Data[0];
+        Assert.True(finalConfidence > initialConfidence);
+    }
+
+    [Fact]
+    public void AnalyzeFieldFlow_ProvidesStablePatterns()
+    {
+        // Arrange
+        var state = CreateRandomState(10);
+
+        // Act
+        var flowPattern = spn.AnalyzeFieldFlow(state);
+
+        // Assert - Basic validation
+        Assert.NotNull(flowPattern);
+        Assert.NotNull(flowPattern.Position);
+        Assert.NotNull(flowPattern.FlowDirection);
+
+        // Assert - Value ranges
+        Assert.InRange(flowPattern.Stability, 0, 1);
+        Assert.InRange(flowPattern.LocalCurvature, 0, float.MaxValue);
+        Assert.InRange(flowPattern.LocalEntropy, 0, float.MaxValue);
+        Assert.InRange(Math.Abs(flowPattern.LocalAlignment), 0, 1);
+
+        // Assert - Array dimensions
+        Assert.Equal(state.Result.Data.Length, flowPattern.Position.Length);
+        Assert.Equal(state.Result.Data.Length, flowPattern.FlowDirection.Length);
+    }
+
+    [Fact]
+    public void AnalyzeFieldFlow_ConsistentForSameState()
+    {
+        // Arrange
+        var state = CreateRandomState(10);
+
+        // Act
+        var pattern1 = spn.AnalyzeFieldFlow(state);
+        var pattern2 = spn.AnalyzeFieldFlow(state);
+
+        // Assert
+        Assert.Equal(pattern1.Position, pattern2.Position, new FloatArrayComparer(EPSILON));
+        Assert.Equal(pattern1.FlowDirection, pattern2.FlowDirection, new FloatArrayComparer(EPSILON));
+        Assert.Equal(pattern1.LocalCurvature, pattern2.LocalCurvature, EPSILON);
+        Assert.Equal(pattern1.LocalEntropy, pattern2.LocalEntropy, EPSILON);
+        Assert.Equal(pattern1.LocalAlignment, pattern2.LocalAlignment, EPSILON);
+        Assert.Equal(pattern1.Stability, pattern2.Stability, EPSILON);
+    }
+
+    [Theory]
+    [InlineData(5)]   // Few steps
+    [InlineData(10)]  // Default steps
+    [InlineData(20)]  // Many steps
+    public void AnalyzeFieldFlow_HandlesVariousStepCounts(int steps)
+    {
+        // Arrange
+        var state = CreateRandomState(10);
+
+        // Act
+        var methodInfo = typeof(SpatialProbabilityNetwork).GetMethod(
+            "AnalyzeFieldFlow",
+            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance
+        );
+        var flowPattern = (FlowPattern)methodInfo.Invoke(spn, new object[] { state, steps });
+
+        // Assert
+        Assert.NotNull(flowPattern);
+        Assert.True(flowPattern.Stability >= 0);
+    }
+
+    [Fact]
+    public void AnalyzeFieldFlow_ReflectsFieldUpdates()
+    {
+        // Arrange
+        var state = CreateRandomState(10);
+        var reward = new PradOp(new Tensor(new[] { 1 }, new[] { 1.0 }));
+        var initialPattern = spn.AnalyzeFieldFlow(state);
+
+        // Act - Update field several times
+        for (int i = 0; i < 5; i++)
+        {
+            var (routing, _, _) = spn.RouteState(state);
+            spn.UpdateFields(routing, reward, state);
+        }
+        var finalPattern = spn.AnalyzeFieldFlow(state);
+
+        // Assert - Flow pattern should change after field updates
+        Assert.NotEqual(
+            initialPattern.FlowDirection, 
+            finalPattern.FlowDirection, 
+            new FloatArrayComparer(EPSILON)
+        );
+        Assert.NotEqual(initialPattern.Stability, finalPattern.Stability);
+    }
+
+    [Fact]
+    public void CalculateFieldMetrics_ReturnsValidMetrics()
+    {
+        // Act
+        var metrics = spn.CalculateFieldMetrics();
+
+        // Assert - Basic validation
+        Assert.NotNull(metrics);
+
+        // Assert - Value ranges
+        Assert.InRange(metrics.GlobalEntropy, 0, float.MaxValue);
+        Assert.InRange(metrics.GlobalCurvature, 0, float.MaxValue);
+        Assert.InRange(Math.Abs(metrics.GlobalAlignment), 0, 1);
+        Assert.InRange(metrics.BeliefStability, 0, 1);
+        Assert.InRange(metrics.CoherenceScore, -1, 1);
+    }
+
+    [Fact]
+    public void CalculateFieldMetrics_ConsistentForUnchangedField()
+    {
+        // Act
+        var metrics1 = spn.CalculateFieldMetrics();
+        var metrics2 = spn.CalculateFieldMetrics();
+
+        // Assert
+        Assert.Equal(metrics1.GlobalEntropy, metrics2.GlobalEntropy, EPSILON);
+        Assert.Equal(metrics1.GlobalCurvature, metrics2.GlobalCurvature, EPSILON);
+        Assert.Equal(metrics1.GlobalAlignment, metrics2.GlobalAlignment, EPSILON);
+        Assert.Equal(metrics1.BeliefStability, metrics2.BeliefStability, EPSILON);
+        Assert.Equal(metrics1.CoherenceScore, metrics2.CoherenceScore, EPSILON);
+    }
+
+    [Fact]
+    public void CalculateFieldMetrics_ChangesWithFieldUpdates()
+    {
+        // Arrange
+        var state = CreateRandomState(10);
+        var reward = new PradOp(new Tensor(new[] { 1 }, new[] { 1.0 }));
+        var initialMetrics = spn.CalculateFieldMetrics();
+
+        // Act - Update field several times
+        for (int i = 0; i < 5; i++)
+        {
+            var (routing, _, _) = spn.RouteState(state);
+            spn.UpdateFields(routing, reward, state);
+        }
+        var finalMetrics = spn.CalculateFieldMetrics();
+
+        // Assert - Metrics should change after updates
+        Assert.NotEqual(initialMetrics.GlobalEntropy, finalMetrics.GlobalEntropy);
+        Assert.NotEqual(initialMetrics.GlobalCurvature, finalMetrics.GlobalCurvature);
+        Assert.NotEqual(initialMetrics.GlobalAlignment, finalMetrics.GlobalAlignment);
+    }
+
+    [Fact]
+    [Fact]
+    public void DynamicFieldFlow_ConvergesToAttractor()
+    {
+        // Arrange - Create a known vector field pointing to an attractor
+        var attractorState = CreateRandomState(10);
+        var reward = new PradOp(new Tensor(new[] { 1 }, new[] { 1.0 }));
+
+        // Train the field to create an attractor
+        for (int i = 0; i < 10; i++)
+        {
+            var (routing, _, _) = spn.RouteState(attractorState);
+            spn.UpdateFields(routing, reward, attractorState);
+        }
+
+        // Create starting state away from attractor
+        var startState = CreateRandomState(10, 0.5f);
+        var initialDist = CalculateDistance(startState.Result.Data, attractorState.Result.Data);
+
+        // Act - Follow flow for multiple steps
+        var flowPattern = spn.AnalyzeFieldFlow(startState, steps: 20);
+        var flowPositions = new List<float[]> { flowPattern.Position };
+
+        // Follow the flow
+        var currentState = startState;
+        for (int i = 0; i < 19; i++)
+        {
+            var (routing, _, _) = spn.RouteState(currentState);
+            currentState = new PradOp(new Tensor(routing.Result.Shape, routing.Result.Data));
+            flowPositions.Add(currentState.Result.Data);
+        }
+
+        // Assert - Verify monotonic movement toward attractor
+        for (int i = 1; i < flowPositions.Count; i++)
+        {
+            var currentDist = CalculateDistance(flowPositions[i], attractorState.Result.Data);
+            Assert.True(currentDist <= CalculateDistance(flowPositions[i-1], attractorState.Result.Data));
+        }
+
+        // Assert - Final position should be closer to attractor
+        var finalDist = CalculateDistance(flowPositions.Last(), attractorState.Result.Data);
+        Assert.True(finalDist < initialDist);
+    }
+
+    [Fact]
+    public void DynamicFieldFlow_MatchesBaseline()
+    {
+        // Arrange - Create and serialize a baseline flow pattern
+        var baselineState = CreateRandomState(10);
+        var baselineFlow = spn.AnalyzeFieldFlow(baselineState);
+        var serializedBaseline = SerializeFlowPattern(baselineFlow);
+
+        // Act - Create new flow pattern from same initial state
+        var newFlow = spn.AnalyzeFieldFlow(baselineState);
+        var serializedNew = SerializeFlowPattern(newFlow);
+
+        // Assert - Compare with allowed delta
+        Assert.Equal(serializedBaseline.Position, serializedNew.Position, new FloatArrayComparer(EPSILON));
+        Assert.Equal(serializedBaseline.FlowDirection, serializedNew.FlowDirection, new FloatArrayComparer(EPSILON));
+        Assert.Equal(serializedBaseline.Stability, serializedNew.Stability, EPSILON);
+    }
+
+    [Fact]
+    public void NarrativeDivergence_CounterfactualPropagation()
+    {
+        // Arrange - Train on initial belief
+        var baseState = CreateRandomState(10);
+        var reward = new PradOp(new Tensor(new[] { 1 }, new[] { 1.0 }));
+
+        // Train the field on base state
+        for (int i = 0; i < 5; i++)
+        {
+            var (routing, _, _) = spn.RouteState(baseState);
+            spn.UpdateFields(routing, reward, baseState);
+        }
+
+        // Create perturbed states (counterfactuals)
+        var perturbation1 = CreatePerturbedState(baseState, 0.2f);
+        var perturbation2 = CreatePerturbedState(baseState, 0.4f);
+
+        // Act - Get flow patterns for base and perturbed states
+        var baseFlow = spn.AnalyzeFieldFlow(baseState);
+        var flow1 = spn.AnalyzeFieldFlow(perturbation1);
+        var flow2 = spn.AnalyzeFieldFlow(perturbation2);
+
+        // Assert - Verify increasing decoherence with perturbation size
+        var divergence1 = CalculateFlowDivergence(baseFlow, flow1);
+        var divergence2 = CalculateFlowDivergence(baseFlow, flow2);
+        Assert.True(divergence2 > divergence1);
+    }
+
+    [Fact]
+    [Fact]
+    public void StateSequence_TemporalCoherence()
+    {
+        // Arrange - Create a sequence of related states
+        var baseState = CreateRandomState(10);
+        var states = new List<PradOp> { baseState };
+        
+        // Create smoothly varying sequence
+        for (int i = 1; i < 5; i++)
+        {
+            var perturbation = CreateRandomState(10, 0.1f * i);
+            states.Add(new PradOp(baseState.Add(perturbation.Result).Result));
+        }
+
+        // Train the field on the sequence
+        var reward = new PradOp(new Tensor(new[] { 1 }, new[] { 1.0 }));
+        foreach (var state in states)
+        {
+            var (routing, _, _) = spn.RouteState(state);
+            spn.UpdateFields(routing, reward, state);
+        }
+
+        // Act - Get flow patterns for each state
+        var flowPatterns = states.Select(s => spn.AnalyzeFieldFlow(s)).ToList();
+
+        // Assert - Verify temporal coherence
+        for (int i = 1; i < flowPatterns.Count; i++)
+        {
+            // Adjacent patterns should be similar
+            var currentDivergence = CalculateFlowDivergence(flowPatterns[i], flowPatterns[i-1]);
+            
+            // Compare with non-adjacent patterns (should be more divergent)
+            for (int j = 0; j < i-1; j++)
+            {
+                var longerDivergence = CalculateFlowDivergence(flowPatterns[i], flowPatterns[j]);
+                Assert.True(longerDivergence > currentDivergence);
+            }
+        }
+
+        // Verify sequence stability
+        Assert.All(flowPatterns, pattern => Assert.True(pattern.Stability > 0.5f));
+    }
+
+    [Fact]
+    public void FieldMemory_BeliefFade()
+    {
+        // Arrange - Train on initial belief
+        var oldBelief = CreateRandomState(10);
+        var reward = new PradOp(new Tensor(new[] { 1 }, new[] { 1.0 }));
+
+        // Get initial routing for old belief
+        var (initialRouting, _, _) = spn.RouteState(oldBelief);
+        var initialResponse = initialRouting.Result.Data.Max();
+
+        // Create contrasting belief
+        var newBelief = CreateRandomState(10);
+        var (_, _, initialFieldParams) = spn.RouteState(newBelief);
+
+        // Act - Repeatedly update with new belief
+        var fieldResponses = new List<double>();
+        for (int i = 0; i < 20; i++)
+        {
+            // Update with new belief
+            var (routing, _, _) = spn.RouteState(newBelief);
+            spn.UpdateFields(routing, reward, newBelief);
+
+            // Check response to old belief
+            var (oldResponse, _, _) = spn.RouteState(oldBelief);
+            fieldResponses.Add(oldResponse.Result.Data.Max());
+        }
+
+        // Assert - Response to old belief should decay
+        for (int i = 1; i < fieldResponses.Count; i++)
+        {
+            Assert.True(fieldResponses[i] <= fieldResponses[i-1]);
+        }
+        Assert.True(fieldResponses.Last() < initialResponse);
+    }
+
+    [Fact]
+    public void FieldSmoothing_NoiseProportionality()
+    {
+        // Arrange
+        var baseState = CreateRandomState(10);
+        var (baseRouting, _, _) = spn.RouteState(baseState);
+
+        // Create states with increasing noise
+        var noiseScales = new[] { 0.01f, 0.05f, 0.1f };
+        var noisyStates = noiseScales.Select(scale => 
+            CreatePerturbedState(baseState, scale)).ToList();
+
+        // Act - Get routing differences
+        var routingDifferences = noisyStates.Select(state => {
+            var (routing, _, _) = spn.RouteState(state);
+            return CalculateRoutingDifference(baseRouting, routing);
+        }).ToList();
+
+        // Assert - Routing differences should be proportional to noise
+        for (int i = 1; i < routingDifferences.Count; i++)
+        {
+            var expectedRatio = noiseScales[i] / noiseScales[i-1];
+            var actualRatio = routingDifferences[i] / routingDifferences[i-1];
+            Assert.True(Math.Abs(actualRatio - expectedRatio) < 0.5);
+        }
+    }
+
+    [Fact]
+    [Fact]
+    public void PolicyNetwork_ActionGeneration()
+    {
+        // Arrange
+        var state = CreateRandomState(10);
+        var history = CreateHistorySequence(5, 10);  // 5 states of history
+        
+        // Act
+        var (routing, policy, reflexes, predictions) = spn.ProcessState(state);
+
+        // Assert - Basic validation
+        Assert.NotNull(policy);
+        Assert.Equal(10, policy.Result.Data.Length);  // 10 governance parameters
+        Assert.All(policy.Result.Data, p => Assert.InRange(p, 0, 1));  // Probabilities
+        Assert.True(Math.Abs(policy.Result.Data.Sum() - 1.0) < EPSILON);  // Valid distribution
+
+        // Test policy consistency
+        var (_, policy2, _, _) = spn.ProcessState(state);
+        Assert.Equal(policy.Result.Data, policy2.Result.Data, new FloatArrayComparer(EPSILON));
+    }
+
+    [Fact]
+    public void PolicyNetwork_HistoryAttention()
+    {
+        // Arrange
+        var state = CreateRandomState(10);
+        
+        // Create two different history sequences
+        var normalHistory = CreateHistorySequence(5, 10);
+        var volatileHistory = CreateVolatileHistorySequence(5, 10);
+
+        // Act - Get policies with different histories
+        spn.ClearTemporalBuffer();
+        foreach (var h in normalHistory) spn.RouteState(h);
+        var (_, policy1, _, _) = spn.ProcessState(state);
+
+        spn.ClearTemporalBuffer();
+        foreach (var h in volatileHistory) spn.RouteState(h);
+        var (_, policy2, _, _) = spn.ProcessState(state);
+
+        // Assert - Policies should differ based on history
+        Assert.NotEqual(policy1.Result.Data, policy2.Result.Data, new FloatArrayComparer(EPSILON));
+    }
+
+    [Fact]
+    public void ReflexNetwork_EmergencyResponse()
+    {
+        // Arrange
+        var normalState = CreateRandomState(10, 0.5f);
+        var extremeState = CreateRandomState(10, 5.0f);  // High magnitude state
+
+        // Act
+        var (_, _, reflexes1, _) = spn.ProcessState(normalState);
+        var (_, _, reflexes2, _) = spn.ProcessState(extremeState);
+
+        // Assert
+        // Reflex activations should be stronger for extreme state
+        Assert.True(reflexes2.Result.Data.Max() > reflexes1.Result.Data.Max());
+        
+        // Verify reflex output properties
+        Assert.Equal(5, reflexes1.Result.Data.Length);  // 5 reflex controls
+        Assert.All(reflexes1.Result.Data, r => Assert.InRange(r, 0, 1));
+    }
+
+    [Fact]
+    public void ReflexNetwork_StabilityResponse()
+    {
+        // Arrange - Create unstable field configuration
+        var state = CreateRandomState(10);
+        var reward = new PradOp(new Tensor(new[] { 1 }, new[] { 1.0 }));
+
+        // Create instability through rapid updates
+        for (int i = 0; i < 10; i++)
+        {
+            var perturbedState = CreatePerturbedState(state, 0.1f * i);
+            var (routing, _, _) = spn.RouteState(perturbedState);
+            spn.UpdateFields(routing, reward, perturbedState);
+        }
+
+        // Act - Check reflex response before and after instability
+        var (_, _, initialReflexes, _) = spn.ProcessState(state);
+        var (_, _, finalReflexes, _) = spn.ProcessState(CreatePerturbedState(state, 1.0f));
+
+        // Assert - Reflexes should be more active in unstable conditions
+        Assert.True(finalReflexes.Result.Data.Average() > initialReflexes.Result.Data.Average());
+    }
+
+    [Fact]
+    public void PredictionNetwork_ForecastAccuracy()
+    {
+        // Arrange - Create a sequence of states
+        var states = new List<PradOp>();
+        var baseState = CreateRandomState(10);
+        var trend = CreateRandomState(10, 0.1f);  // Small consistent change
+
+        // Create sequence with trend
+        for (int i = 0; i < 10; i++)
+        {
+            states.Add(new PradOp(baseState.Add(trend.Mul(new Tensor(trend.CurrentShape, i)).Result).Result));
+        }
+
+        // Feed sequence to SPN
+        foreach (var state in states.Take(8))  // Leave last 2 for validation
+        {
+            spn.RouteState(state);
+        }
+
+        // Act
+        var (_, _, _, predictions) = spn.ProcessState(states[7]);  // Predict from t=7
+
+        // Assert
+        Assert.Equal(4, predictions.Result.Data.Length);  // [value, confidence, upper, lower]
+        Assert.True(predictions.Result.Data[1] > 0.5);   // Should have some confidence
+        
+        // Verify prediction bounds contain actual values
+        var actual8 = CalculateStateValue(states[8]);
+        Assert.True(predictions.Result.Data[0] - predictions.Result.Data[3] <= actual8 &&
+                   actual8 <= predictions.Result.Data[0] + predictions.Result.Data[2]);
+    }
+
+    [Fact]
+    public void PredictionNetwork_UncertaintyScaling()
+    {
+        // Arrange
+        var state = CreateRandomState(10);
+        
+        // Create stable and unstable histories
+        var stableHistory = Enumerable.Range(0, 5)
+            .Select(_ => CreatePerturbedState(state, 0.1f))
+            .ToList();
+        
+        var unstableHistory = Enumerable.Range(0, 5)
+            .Select(i => CreatePerturbedState(state, 0.1f * (i + 1)))
+            .ToList();
+
+        // Act - Get predictions for both scenarios
+        spn.ClearTemporalBuffer();
+        foreach (var h in stableHistory) spn.RouteState(h);
+        var (_, _, _, stablePredictions) = spn.ProcessState(state);
+
+        spn.ClearTemporalBuffer();
+        foreach (var h in unstableHistory) spn.RouteState(h);
+        var (_, _, _, unstablePredictions) = spn.ProcessState(state);
+
+        // Assert - Prediction bounds should be wider for unstable history
+        var stableBoundWidth = unstablePredictions.Result.Data[2] + unstablePredictions.Result.Data[3];
+        var unstableBoundWidth = stablePredictions.Result.Data[2] + stablePredictions.Result.Data[3];
+        Assert.True(unstableBoundWidth > stableBoundWidth);
+    }
+
+    public void Entropy_SignalShapeReactivity()
+    {
+        // Arrange - Create states with different signal shapes
+        var sharpState = CreateGaussianState(10, sigma: 0.1f);  // Concentrated signal
+        var broadState = CreateGaussianState(10, sigma: 2.0f);   // Diffuse signal
+        var uniformState = CreateUniformState(10);               // Maximum entropy
+
+        // Act - Get field parameters for each state
+        var (_, _, sharpParams) = spn.RouteState(sharpState);
+        var (_, _, broadParams) = spn.RouteState(broadState);
+        var (_, _, uniformParams) = spn.RouteState(uniformState);
+
+        // Assert - Entropy should reflect signal shape
+        Assert.True(sharpParams.Entropy < broadParams.Entropy);
+        Assert.True(broadParams.Entropy < uniformParams.Entropy);
+
+        // Verify entropy bounds
+        Assert.True(sharpParams.Entropy >= 0);
+        Assert.True(uniformParams.Entropy <= Math.Log(10));  // Max entropy for 10-dim state
+    }
+
+    public void NarrativeDivergence_BeliefDecoherence()
+    {
+        // Arrange - Create two divergent beliefs
+        var belief1 = CreateRandomState(10);
+        var belief2 = CreateRandomState(10);
+        var reward = new PradOp(new Tensor(new[] { 1 }, new[] { 1.0 }));
+
+        // Initial routing similarity
+        var (routing1Initial, _, _) = spn.RouteState(belief1);
+        var (routing2Initial, _, _) = spn.RouteState(belief2);
+        var initialSimilarity = CalculateRoutingSimilarity(routing1Initial, routing2Initial);
+
+        // Act - Train on divergent beliefs
+        for (int i = 0; i < 10; i++)
+        {
+            // Update with belief1
+            var (r1, _, _) = spn.RouteState(belief1);
+            spn.UpdateFields(r1, reward, belief1);
+
+            // Update with opposing belief2
+            var (r2, _, _) = spn.RouteState(belief2);
+            spn.UpdateFields(r2, reward.Mul(new Tensor(reward.CurrentShape, -1.0)).Result, belief2);
+        }
+
+        // Get final routing
+        var (routing1Final, _, _) = spn.RouteState(belief1);
+        var (routing2Final, _, _) = spn.RouteState(belief2);
+        var finalSimilarity = CalculateRoutingSimilarity(routing1Final, routing2Final);
+
+        // Assert - Routing should become more dissimilar
+        Assert.True(finalSimilarity < initialSimilarity);
+    }
+
+    private SerializedFlowPattern SerializeFlowPattern(FlowPattern pattern)
+    {
+        return new SerializedFlowPattern
+        {
+            Position = pattern.Position,
+            FlowDirection = pattern.FlowDirection,
+            Stability = pattern.Stability
+        };
+    }
+
+    private PradOp CreatePerturbedState(PradOp baseState, float perturbationScale)
+    {
+        var perturbation = CreateRandomState(baseState.Result.Shape[0], perturbationScale);
+        return new PradOp(baseState.Add(perturbation.Result).Result);
+    }
+
+    private float CalculateDistance(double[] v1, double[] v2)
+    {
+        return (float)Math.Sqrt(v1.Zip(v2, (a, b) => Math.Pow(a - b, 2)).Sum());
+    }
+
+    private float CalculateFlowDivergence(FlowPattern flow1, FlowPattern flow2)
+    {
+        var posDivergence = CalculateDistance(
+            flow1.Position.Select(x => (double)x).ToArray(),
+            flow2.Position.Select(x => (double)x).ToArray());
+        var dirDivergence = CalculateDistance(
+            flow1.FlowDirection.Select(x => (double)x).ToArray(),
+            flow2.FlowDirection.Select(x => (double)x).ToArray());
+        return posDivergence + dirDivergence;
+    }
+
+    private float CalculateCosineSimilarity(double[] v1, double[] v2)
+    {
+        var dot = v1.Zip(v2, (a, b) => a * b).Sum();
+        var norm1 = Math.Sqrt(v1.Sum(x => x * x));
+        var norm2 = Math.Sqrt(v2.Sum(x => x * x));
+        return (float)(dot / (norm1 * norm2));
+    }
+
+    private float CalculateRoutingSimilarity(PradResult routing1, PradResult routing2)
+    {
+        return CalculateCosineSimilarity(routing1.Result.Data, routing2.Result.Data);
+    }
+
+    private float CalculateRoutingDifference(PradResult routing1, PradResult routing2)
+    {
+        return (float)Math.Sqrt(
+            routing1.Result.Data
+                .Zip(routing2.Result.Data, (a, b) => Math.Pow(a - b, 2))
+                .Sum()
+        );
+    }
+
+    private float CalculateStateValue(PradOp state)
+    {
+        return (float)state.Result.Data.Average();
+    }
+
+    private PradOp CreatePerturbedState(PradOp baseState, float noiseScale)
+    {
+        var noise = CreateRandomState(baseState.Result.Shape[0], noiseScale);
+        return new PradOp(baseState.Add(noise.Result).Result);
+    }
+            routing1.Result.Data
+                .Zip(routing2.Result.Data, (a, b) => Math.Pow(a - b, 2))
+                .Sum()
+        );
+    }
+
+    private PradOp CreateGaussianState(int dim, float sigma)
+    {
+        var random = new Random();
+        var data = new double[dim];
+        var center = dim / 2;
+        
+        for (int i = 0; i < dim; i++)
+        {
+            var distance = (i - center) / (float)dim;
+            data[i] = Math.Exp(-distance * distance / (2 * sigma * sigma));
+        }
+
+        // Normalize
+        var sum = data.Sum();
+        for (int i = 0; i < dim; i++)
+        {
+            data[i] /= sum;
+        }
+
+        return new PradOp(new Tensor(new[] { dim }, data));
+    }
+
+    private PradOp CreateUniformState(int dim)
+    {
+        var data = new double[dim];
+        for (int i = 0; i < dim; i++)
+        {
+            data[i] = 1.0 / dim;
+        }
+        return new PradOp(new Tensor(new[] { dim }, data));
+    }
+
+    private List<PradOp> CreateHistorySequence(int length, int dim, float noiseScale = 0.1f)
+    {
+        var sequence = new List<PradOp>();
+        var baseState = CreateRandomState(dim);
+
+        for (int i = 0; i < length; i++)
+        {
+            sequence.Add(CreatePerturbedState(baseState, noiseScale));
+        }
+
+        return sequence;
+    }
+
+    private List<PradOp> CreateVolatileHistorySequence(int length, int dim)
+    {
+        var sequence = new List<PradOp>();
+        var baseState = CreateRandomState(dim);
+
+        for (int i = 0; i < length; i++)
+        {
+            var volatility = (i + 1) * 0.2f;  // Increasing volatility
+            sequence.Add(CreatePerturbedState(baseState, volatility));
+        }
+
+        return sequence;
+    }
+
+    private float CalculateStateValue(PradOp state)
+    {
+        // Simple value calculation - can be enhanced based on specific requirements
+        return (float)state.Result.Data.Average();
+    }
+
+    private class SerializedFlowPattern
+    {
+        public float[] Position { get; set; }
+        public float[] FlowDirection { get; set; }
+        public float Stability { get; set; }
+    }
+
+    public void CalculateFieldMetrics_ReflectsFieldStability()
+    {
+        // Arrange
+        var state = CreateRandomState(10);
+        var reward = new PradOp(new Tensor(new[] { 1 }, new[] { 1.0 }));
+        var initialMetrics = spn.CalculateFieldMetrics();
+
+        // Act - Train on same state multiple times
+        for (int i = 0; i < 10; i++)
+        {
+            var (routing, _, _) = spn.RouteState(state);
+            spn.UpdateFields(routing, reward, state);
+        }
+        var finalMetrics = spn.CalculateFieldMetrics();
+
+        // Assert - Stability should increase with consistent training
+        Assert.True(finalMetrics.BeliefStability >= initialMetrics.BeliefStability);
+    }
+
+    [Theory]
+    [InlineData(0.1f)]
+    [InlineData(0.5f)]
+    [InlineData(0.9f)]
+    public void RouteState_RespectsFieldParameters(float strength)
+    {
+        // Arrange
+        var state = CreateRandomState(10, strength);
+
+        // Act
+        var (routing, confidence, fieldParams) = spn.RouteState(state);
+
+        // Assert
+        Assert.InRange(routing.Result.Data.Max(), 0, 1);
+        Assert.True(routing.Result.Data.Sum() > 0.99f && routing.Result.Data.Sum() < 1.01f);
+    }
+
+    [Fact]
+    public void GeometricField_CalculatesCorrectProperties()
+    {
+        // Arrange
+        var state = CreateRandomState(10);
+        var (routing, _, _) = spn.RouteState(state);
+
+        // Act - Use reflection to access private method
+        var methodInfo = typeof(SpatialProbabilityNetwork).GetMethod(
+            "CalculateFieldGeometry", 
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance
+        );
+        var geometry = (GeometricField)methodInfo.Invoke(spn, new object[] { state, routing });
+
+        // Assert
+        Assert.NotNull(geometry);
+        Assert.NotNull(geometry.Direction);
+        Assert.InRange(geometry.Strength, 0, 1);
+        Assert.InRange(geometry.LocalCurvature, 0, float.MaxValue);
+        Assert.NotEqual(0, geometry.LocalDivergence); // Should have some flow
+        Assert.InRange(Math.Abs(geometry.LocalRotation), 0, 1);
+    }
+
+    [Fact]
+    public void TemporalBuffer_MaintainsCorrectSize()
+    {
+        // Arrange
+        var states = Enumerable.Range(0, 7)
+            .Select(_ => CreateRandomState(10))
+            .ToList();
+
+        // Act
+        foreach (var state in states)
+        {
+            spn.RouteState(state);
+        }
+
+        // Access buffer size through reflection
+        var fieldInfo = typeof(SpatialProbabilityNetwork).GetField(
+            "temporalBuffer",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance
+        );
+        var buffer = (System.Collections.Generic.Queue<Tensor>)fieldInfo.GetValue(spn);
+
+        // Assert
+        Assert.Equal(5, buffer.Count); // Should match bufferSize from constructor
+    }
+
+    [Fact]
+    public void ConsistentRouting_ProducesStableFlow()
+    {
+        // Arrange
+        var state = CreateRandomState(10);
+        var patterns = new List<FlowPattern>();
+
+        // Act
+        for (int i = 0; i < 5; i++)
+        {
+            patterns.Add(spn.AnalyzeFieldFlow(state));
+        }
+
+        // Assert
+        var stabilityVariance = CalculateVariance(patterns.Select(p => p.Stability));
+        Assert.True(stabilityVariance < 0.1); // Flow patterns should be relatively consistent
+    }
+
+    private PradOp CreateRandomState(int dim, float strength = 1.0f)
+    {
+        var random = new Random();
+        var data = new double[dim];
+        for (int i = 0; i < dim; i++)
+        {
+            data[i] = (random.NextDouble() * 2 - 1) * strength;
+        }
+        return new PradOp(new Tensor(new[] { dim }, data));
+    }
+
+    private double CalculateVariance(IEnumerable<float> values)
+    {
+        var list = values.ToList();
+        var mean = list.Average();
+        var sumSquares = list.Sum(x => Math.Pow(x - mean, 2));
+        return sumSquares / list.Count;
+    }
+
+    private T GetPrivateField<T>(object obj, string fieldName)
+    {
+        var field = obj.GetType().GetField(
+            fieldName,
+            System.Reflection.BindingFlags.NonPublic | 
+            System.Reflection.BindingFlags.Instance
+        );
+        return (T)field.GetValue(obj);
+    }
+
+    private void AssertFieldParamsEqual(
+        SpatialProbabilityNetwork.FieldParameters params1,
+        SpatialProbabilityNetwork.FieldParameters params2)
+    {
+        Assert.Equal(params1.Curvature, params2.Curvature, EPSILON);
+        Assert.Equal(params1.Entropy, params2.Entropy, EPSILON);
+        Assert.Equal(params1.Alignment, params2.Alignment, EPSILON);
+    }
+}
+
+public class FloatArrayComparer : IEqualityComparer<double[]>
+{
+    private readonly float epsilon;
+
+    public FloatArrayComparer(float epsilon)
+    {
+        this.epsilon = epsilon;
+    }
+
+    public bool Equals(double[] x, double[] y)
+    {
+        if (ReferenceEquals(x, y)) return true;
+        if (x == null || y == null) return false;
+        if (x.Length != y.Length) return false;
+
+        return !x.Where((t, i) => Math.Abs(t - y[i]) > epsilon).Any();
+    }
+
+    public int GetHashCode(double[] obj)
+    {
+        if (obj == null) return 0;
+        return obj.Aggregate(17, (current, item) => current * 23 + item.GetHashCode());
+    }
+}
+}
+
+public class FlowPatternTests
+{
+    [Fact]
+    public void FlowPattern_PropertiesInitializeCorrectly()
+    {
+        // Arrange & Act
+        var pattern = new FlowPattern
+        {
+            Position = new float[] { 1, 2, 3 },
+            FlowDirection = new float[] { 0.1f, 0.2f, 0.3f },
+            LocalCurvature = 0.5f,
+            LocalEntropy = 0.3f,
+            LocalAlignment = 0.8f,
+            Stability = 0.9f
+        };
+
+        // Assert
+        Assert.NotNull(pattern.Position);
+        Assert.NotNull(pattern.FlowDirection);
+        Assert.Equal(3, pattern.Position.Length);
+        Assert.Equal(3, pattern.FlowDirection.Length);
+        Assert.Equal(0.5f, pattern.LocalCurvature);
+        Assert.Equal(0.3f, pattern.LocalEntropy);
+        Assert.Equal(0.8f, pattern.LocalAlignment);
+        Assert.Equal(0.9f, pattern.Stability);
+    }
+}
+
+public class GeometricFieldTests
+{
+    [Fact]
+    public void GeometricField_PropertiesInitializeCorrectly()
+    {
+        // Arrange & Act
+        var field = new GeometricField
+        {
+            Direction = new float[] { 0.1f, 0.2f, 0.3f },
+            Strength = 0.8f,
+            LocalCurvature = 0.4f,
+            LocalDivergence = 0.2f,
+            LocalRotation = 0.1f
+        };
+
+        // Assert
+        Assert.NotNull(field.Direction);
+        Assert.Equal(3, field.Direction.Length);
+        Assert.Equal(0.8f, field.Strength);
+        Assert.Equal(0.4f, field.LocalCurvature);
+        Assert.Equal(0.2f, field.LocalDivergence);
+        Assert.Equal(0.1f, field.LocalRotation);
+    }
+}
+
+public class FieldParametersTests
+{
+    [Fact]
+    public void FieldParameters_PropertiesInitializeCorrectly()
+    {
+        // Arrange & Act
+        var parameters = new SpatialProbabilityNetwork.FieldParameters
+        {
+            Curvature = 0.5f,
+            Entropy = 0.3f,
+            Alignment = 0.8f
+        };
+
+        // Assert
+        Assert.Equal(0.5f, parameters.Curvature);
+        Assert.Equal(0.3f, parameters.Entropy);
+        Assert.Equal(0.8f, parameters.Alignment);
+    }
+}
+
+public class FieldMetricsTests
+{
+    [Fact]
+    public void FieldMetrics_PropertiesInitializeCorrectly()
+    {
+        // Arrange & Act
+        var metrics = new SpatialProbabilityNetwork.FieldMetrics
+        {
+            GlobalEntropy = 0.5f,
+            GlobalCurvature = 0.4f,
+            GlobalAlignment = 0.7f,
+            BeliefStability = 0.8f,
+            CoherenceScore = 0.9f
+        };
+
+        // Assert
+        Assert.Equal(0.5f, metrics.GlobalEntropy);
+        Assert.Equal(0.4f, metrics.GlobalCurvature);
+        Assert.Equal(0.7f, metrics.GlobalAlignment);
+        Assert.Equal(0.8f, metrics.BeliefStability);
+        Assert.Equal(0.9f, metrics.CoherenceScore);
+    }
+}

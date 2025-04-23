@@ -8,9 +8,16 @@ public class SpatialProbabilityNetwork
     private readonly int bufferSize;
     
     // Core fields
-    private PradOp vectorField;        // Learned directional fields
-    private PradOp probabilityField;   // Generated probability distribution
+    private PradOp vectorField;        // Learned directional fields for belief tendency
+    private PradOp curvatureField;     // Field curvature for belief stability
+    private PradOp entropyField;       // Field entropy for uncertainty
+    private PradOp alignmentField;     // Field alignment for belief coherence
     private readonly Queue<Tensor> temporalBuffer;  // Historical state buffer
+
+    // Field parameters
+    private const float LEARNING_RATE = 0.01f;
+    private const float FIELD_DECAY = 0.999f;
+    private const float MIN_FIELD_STRENGTH = 1e-6f;
     
     public SpatialProbabilityNetwork(
         int stateDim = 20,
@@ -33,13 +40,11 @@ public class SpatialProbabilityNetwork
         var vectorFieldTensor = new Tensor(fieldShape.Concat(new[] { vectorDim }).ToArray(), vectorFieldData);
         vectorField = new PradOp(NormalizeVectorField(vectorFieldTensor));
         
-        // Initialize probability field with uniform distribution
-        var probFieldData = new double[fieldShape[0] * fieldShape[1]];
-        for (int i = 0; i < probFieldData.Length; i++)
-        {
-            probFieldData[i] = 1.0 / (fieldShape[0] * fieldShape[1]);
-        }
-        probabilityField = new PradOp(new Tensor(fieldShape, probFieldData));
+        // Initialize field metrics
+        var fieldSize = fieldShape[0] * fieldShape[1];
+        curvatureField = new PradOp(new Tensor(fieldShape, new double[fieldSize]));
+        entropyField = new PradOp(new Tensor(fieldShape, Enumerable.Repeat(1.0 / fieldSize, fieldSize).ToArray()));
+        alignmentField = new PradOp(new Tensor(fieldShape, new double[fieldSize]));
         
         temporalBuffer = new Queue<Tensor>(bufferSize);
     }
@@ -73,7 +78,14 @@ public class SpatialProbabilityNetwork
         return new Tensor(shape, result);
     }
 
-    public (PradResult probabilities, PradResult confidence) RouteState(PradOp state)
+    public class FieldParameters
+    {
+        public float Curvature { get; set; }     // Stability measure
+        public float Entropy { get; set; }       // Uncertainty measure
+        public float Alignment { get; set; }     // Coherence measure
+    }
+
+    public (PradResult routing, PradResult confidence, FieldParameters fieldParams) RouteState(PradOp state)
     {
         // Add state to temporal buffer
         if (temporalBuffer.Count >= bufferSize)
@@ -82,25 +94,280 @@ public class SpatialProbabilityNetwork
         }
         temporalBuffer.Enqueue(state.CurrentTensor);
 
-        // Calculate cosine similarity between state and vector field
+        // Calculate cosine similarity between state and vector field for routing
         var similarity = state.MatMul(vectorField.Transpose());
-        
-        // Generate routing probabilities using softmax
         var routing = similarity.Then(PradOp.SoftmaxOp);
+
+        // Calculate local field parameters
+        var localParams = CalculateFieldParameters(state, routing);
         
-        // Calculate routing entropy
-        var entropy = routing.Then(probs => {
-            var logProbs = probs.Then(PradOp.LnOp);
-            return probs.Mul(logProbs.Result).Then(PradOp.MeanOp);
-        });
-        
-        // Calculate routing confidence as 1 - entropy
-        var confidence = entropy.Then(e => {
-            var one = new Tensor(e.Result.Shape, 1.0);
-            return new PradOp(one).Sub(e.Result);
+        // Update field metrics
+        UpdateFieldMetrics(state, routing, localParams);
+
+        // Calculate routing confidence based on field parameters
+        var confidence = CalculateRoutingConfidence(localParams);
+
+        return (routing, confidence, localParams);
+    }
+
+    private FieldParameters CalculateFieldParameters(PradOp state, PradResult routing)
+    {
+        // Calculate local curvature (stability)
+        var localCurvature = CalculateLocalCurvature(state, routing);
+
+        // Calculate local entropy (uncertainty)
+        var localEntropy = CalculateLocalEntropy(routing);
+
+        // Calculate local alignment (coherence)
+        var localAlignment = CalculateLocalAlignment(state, routing);
+
+        return new FieldParameters
+        {
+            Curvature = localCurvature.Result.Data[0],
+            Entropy = localEntropy.Result.Data[0],
+            Alignment = localAlignment.Result.Data[0]
+        };
+    }
+
+    private PradResult CalculateLocalCurvature(PradOp state, PradResult routing)
+    {
+        // Estimate local field curvature through finite differences
+        var epsilon = 1e-5f;
+        var deltaCurvature = state.Then(s => {
+            var perturbed = new PradOp(s.Result.Add(new Tensor(s.Result.Shape, epsilon)));
+            var perturbedRouting = perturbed.MatMul(vectorField.Transpose())
+                .Then(PradOp.SoftmaxOp);
+            
+            // Second derivative approximation
+            return routing.Sub(perturbedRouting.Result).Then(PradOp.SquareOp)
+                .Then(PradOp.MeanOp).Mul(new Tensor(new[] { 1 }, 1.0f / (epsilon * epsilon)));
         });
 
-        return (routing, confidence);
+        return deltaCurvature;
+    }
+
+    private PradResult CalculateLocalEntropy(PradResult routing)
+    {
+        // Calculate entropy of routing distribution
+        return routing.Then(r => {
+            var logProbs = r.Then(PradOp.LnOp);
+            return r.Mul(logProbs.Result).Then(PradOp.MeanOp).Mul(new Tensor(new[] { 1 }, -1.0));
+        });
+    }
+
+    private PradResult CalculateLocalAlignment(PradOp state, PradResult routing)
+    {
+        // Calculate alignment through vector field coherence
+        var fieldDirection = vectorField.Then(v => v.MatMul(routing.Result));
+        return state.MatMul(fieldDirection.Result).Then(PradOp.MeanOp);
+    }
+
+    public class FlowPattern
+    {
+        public float[] Position { get; set; }
+        public float[] FlowDirection { get; set; }
+        public float LocalCurvature { get; set; }
+        public float LocalEntropy { get; set; }
+        public float LocalAlignment { get; set; }
+        public float Stability { get; set; }
+    }
+
+    public class GeometricField
+    {
+        public float[] Direction { get; set; }
+        public float Strength { get; set; }
+        public float LocalCurvature { get; set; }
+        public float LocalDivergence { get; set; }
+        public float LocalRotation { get; set; }
+    }
+
+    private void UpdateFieldMetrics(PradOp state, PradResult routing, FieldParameters localParams)
+    {
+        // Calculate geometric field properties
+        var geometry = CalculateFieldGeometry(state, routing);
+
+        // Update curvature field incorporating geometric properties
+        var curvatureUpdate = localParams.Curvature * (1 - FIELD_DECAY) + 
+                            geometry.LocalCurvature * LEARNING_RATE;
+        curvatureField = new PradOp(
+            curvatureField.Mul(new Tensor(curvatureField.CurrentShape, FIELD_DECAY)).Result
+            .Add(new Tensor(curvatureField.CurrentShape, curvatureUpdate))
+        );
+
+        // Update entropy field with local divergence influence
+        var entropyUpdate = localParams.Entropy * (1 - FIELD_DECAY) + 
+                          Math.Abs(geometry.LocalDivergence) * LEARNING_RATE;
+        entropyField = new PradOp(
+            entropyField.Mul(new Tensor(entropyField.CurrentShape, FIELD_DECAY)).Result
+            .Add(new Tensor(entropyField.CurrentShape, entropyUpdate))
+        );
+
+        // Update alignment field considering field rotation
+        var alignmentUpdate = localParams.Alignment * (1 - FIELD_DECAY) + 
+                            (1 - Math.Abs(geometry.LocalRotation)) * LEARNING_RATE;
+        alignmentField = new PradOp(
+            alignmentField.Mul(new Tensor(alignmentField.CurrentShape, FIELD_DECAY)).Result
+            .Add(new Tensor(alignmentField.CurrentShape, alignmentUpdate))
+        );
+    }
+
+    private GeometricField CalculateFieldGeometry(PradOp state, PradResult routing)
+    {
+        // Calculate field direction and strength
+        var fieldDirection = vectorField.MatMul(routing.Result);
+        var fieldStrength = routing.Result.Data.Max();
+
+        // Calculate local curvature using finite differences
+        var curvature = CalculateLocalCurvature(state, routing);
+
+        // Calculate divergence (spreading/converging of belief flow)
+        var divergence = CalculateLocalDivergence(state, routing);
+
+        // Calculate rotation (circular flow patterns)
+        var rotation = CalculateLocalRotation(state, routing);
+
+        return new GeometricField
+        {
+            Direction = fieldDirection.Result.Data,
+            Strength = fieldStrength,
+            LocalCurvature = curvature.Result.Data[0],
+            LocalDivergence = divergence.Result.Data[0],
+            LocalRotation = rotation.Result.Data[0]
+        };
+    }
+
+    private PradResult CalculateLocalDivergence(PradOp state, PradResult routing)
+    {
+        // Compute divergence using central differences
+        var epsilon = 1e-5f;
+        return state.Then(s => {
+            var gradients = new List<PradResult>();
+            for (int i = 0; i < s.Result.Shape[0]; i++)
+            {
+                var delta = new float[s.Result.Shape[0]];
+                delta[i] = epsilon;
+                
+                var forward = new PradOp(s.Result.Add(new Tensor(delta)));
+                var backward = new PradOp(s.Result.Sub(new Tensor(delta)));
+                
+                var forwardRoute = forward.MatMul(vectorField.Transpose()).Then(PradOp.SoftmaxOp);
+                var backwardRoute = backward.MatMul(vectorField.Transpose()).Then(PradOp.SoftmaxOp);
+                
+                gradients.Add(forwardRoute.Sub(backwardRoute.Result).Mul(new Tensor(new[] { 1 }, 1.0f / (2 * epsilon))));
+            }
+            
+            return gradients.Aggregate((a, b) => a.Add(b.Result)).Then(PradOp.MeanOp);
+        });
+    }
+
+    private PradResult CalculateLocalRotation(PradOp state, PradResult routing)
+    {
+        // Calculate curl-like measure of rotational flow
+        var epsilon = 1e-5f;
+        return state.Then(s => {
+            var rotations = new List<PradResult>();
+            for (int i = 0; i < s.Result.Shape[0] - 1; i++)
+            {
+                for (int j = i + 1; j < s.Result.Shape[0]; j++)
+                {
+                    var deltaI = new float[s.Result.Shape[0]];
+                    var deltaJ = new float[s.Result.Shape[0]];
+                    deltaI[i] = epsilon;
+                    deltaJ[j] = epsilon;
+                    
+                    var plusI = new PradOp(s.Result.Add(new Tensor(deltaI)));
+                    var plusJ = new PradOp(s.Result.Add(new Tensor(deltaJ)));
+                    
+                    var routeI = plusI.MatMul(vectorField.Transpose()).Then(PradOp.SoftmaxOp);
+                    var routeJ = plusJ.MatMul(vectorField.Transpose()).Then(PradOp.SoftmaxOp);
+                    
+                    rotations.Add(routeI.Sub(routeJ.Result).Then(PradOp.MeanOp));
+                }
+            }
+            
+            return rotations.Aggregate((a, b) => a.Add(b.Result)).Then(PradOp.MeanOp);
+        });
+    }
+
+    public FlowPattern AnalyzeFieldFlow(PradOp state, int steps = 10)
+    {
+        var currentState = state;
+        var history = new List<GeometricField>();
+        
+        for (int i = 0; i < steps; i++)
+        {
+            // Get current routing and field parameters
+            var (routing, _, fieldParams) = RouteState(currentState);
+            var geometry = CalculateFieldGeometry(currentState, routing);
+            history.Add(geometry);
+            
+            // Update state following field flow
+            currentState = new PradOp(routing.Result);
+        }
+        
+        // Analyze flow stability and patterns
+        return new FlowPattern
+        {
+            Position = state.Result.Data,
+            FlowDirection = history.Last().Direction,
+            LocalCurvature = history.Average(g => g.LocalCurvature),
+            LocalEntropy = history.Average(g => -Math.Log(g.Strength)),
+            LocalAlignment = history.Average(g => 1 - Math.Abs(g.LocalRotation)),
+            Stability = CalculateFlowStability(history)
+        };
+    }
+
+    private float CalculateFlowStability(List<GeometricField> history)
+    {
+        // Analyze flow consistency over time
+        float directionStability = 0;
+        float strengthStability = 0;
+        float geometricStability = 0;
+
+        for (int i = 1; i < history.Count; i++)
+        {
+            // Direction consistency
+            directionStability += CosineSimilarity(
+                history[i].Direction,
+                history[i-1].Direction);
+
+            // Strength consistency
+            strengthStability += 1 - Math.Abs(
+                history[i].Strength - history[i-1].Strength);
+
+            // Geometric consistency (curvature, divergence, rotation)
+            geometricStability += 1 - (
+                Math.Abs(history[i].LocalCurvature - history[i-1].LocalCurvature) +
+                Math.Abs(history[i].LocalDivergence - history[i-1].LocalDivergence) +
+                Math.Abs(history[i].LocalRotation - history[i-1].LocalRotation)
+            ) / 3;
+        }
+
+        // Combine stability measures
+        return (directionStability + strengthStability + geometricStability) / 
+               (3 * (history.Count - 1));
+    }
+
+    private float CosineSimilarity(float[] v1, float[] v2)
+    {
+        float dot = v1.Zip(v2, (a, b) => a * b).Sum();
+        float norm1 = (float)Math.Sqrt(v1.Sum(x => x * x));
+        float norm2 = (float)Math.Sqrt(v2.Sum(x => x * x));
+        return dot / (norm1 * norm2);
+    }
+
+    private PradResult CalculateRoutingConfidence(FieldParameters fieldParams)
+    {
+        // Calculate confidence incorporating flow stability
+        var state = new PradOp(new Tensor(vectorField.CurrentShape, fieldParams.Alignment));
+        var flowPattern = AnalyzeFieldFlow(state);
+
+        float confidence = (1 - fieldParams.Entropy) *                // High confidence when entropy is low
+                         (1 / (1 + fieldParams.Curvature)) *         // High confidence when curvature is low
+                         Math.Abs(fieldParams.Alignment) *           // High confidence when alignment is strong
+                         flowPattern.Stability;                      // High confidence when flow is stable
+
+        return new PradOp(new Tensor(new[] { 1 }, confidence));
     }
 
     public PradResult AmplifyRoute(PradResult route, PradResult confidence)
@@ -114,39 +381,129 @@ public class SpatialProbabilityNetwork
         return route.Then(r => r.Mul(amplificationFactor.Result));
     }
 
-    public void UpdateFields(PradResult route, PradResult reward)
+    public void UpdateFields(PradResult route, PradResult reward, PradOp state)
     {
-        // Update vector field using Hebbian-like learning
+        // Calculate field parameters for the update
+        var (_, _, fieldParams) = RouteState(state);
+
+        // Update vector field using belief-aligned Hebbian learning
         var fieldUpdate = route.Then(r => {
-            var learningRate = new Tensor(r.Result.Shape, 0.01);
-            return r.Mul(reward.Result).Mul(learningRate);
+            // Scale learning by field parameters
+            float adaptiveLearningRate = LEARNING_RATE * 
+                (1 - fieldParams.Entropy) *         // Learn more when certain
+                (1 / (1 + fieldParams.Curvature)); // Learn less in unstable regions
+
+            var learningRateTensor = new Tensor(r.Result.Shape, adaptiveLearningRate);
+            return r.Mul(reward.Result).Mul(learningRateTensor);
         });
 
+        // Apply weighted update based on alignment
+        var alignmentWeight = Math.Abs(fieldParams.Alignment);
         vectorField = new PradOp(
-            vectorField.Add(fieldUpdate.Result).Result
+            vectorField.Mul(new Tensor(vectorField.CurrentShape, 1 - alignmentWeight * LEARNING_RATE)).Result
+            .Add(fieldUpdate.Result)
         );
+
+        // Normalize the updated field
         vectorField = new PradOp(NormalizeVectorField(vectorField.CurrentTensor));
 
-        // Update probability field
-        var probUpdate = route.Then(r => {
-            var momentum = new Tensor(r.Result.Shape, 0.9);
-            return probabilityField.Mul(momentum)
-                .Add(r.Mul(new Tensor(r.Result.Shape, 0.1)).Result);
-        });
+        // Update field metrics based on the learning outcome
+        UpdateFieldMetrics(state, route, fieldParams);
 
-        probabilityField = new PradOp(probUpdate.Result);
+        // Apply belief reinforcement through field coupling
+        ApplyBeliefCoupling(route, fieldParams);
     }
 
-    public PradResult CalculateFieldMetrics()
+    private void ApplyBeliefCoupling(PradResult route, FieldParameters fieldParams)
     {
-        // Calculate various field metrics for monitoring
-        var fieldEntropy = probabilityField.Then(PradOp.MeanOp);
-        var fieldCoherence = vectorField.Then(v => {
-            var meanVector = v.Then(PradOp.MeanOp);
-            return v.MatMul(meanVector.Result);
+        // Calculate coupling strength based on field parameters
+        float couplingStrength = Math.Max(0, fieldParams.Alignment) * (1 - fieldParams.Entropy);
+
+        // Identify strongly coupled regions in the field
+        var coupledRegions = route.Then(r => {
+            return r.Result.Data
+                .Select(p => p > MIN_FIELD_STRENGTH ? p * couplingStrength : 0)
+                .ToArray();
         });
 
-        return fieldCoherence;
+        // Update vector field to reinforce coupled beliefs
+        var couplingUpdate = new PradOp(new Tensor(route.Result.Shape, coupledRegions));
+        vectorField = new PradOp(
+            vectorField.Add(couplingUpdate.Mul(new Tensor(couplingUpdate.CurrentShape, LEARNING_RATE)).Result).Result
+        );
+    }
+
+    public class FieldMetrics
+    {
+        public float GlobalEntropy { get; set; }
+        public float GlobalCurvature { get; set; }
+        public float GlobalAlignment { get; set; }
+        public float BeliefStability { get; set; }
+        public float CoherenceScore { get; set; }
+    }
+
+    public FieldMetrics CalculateFieldMetrics()
+    {
+        // Calculate global entropy across the field
+        var globalEntropy = entropyField.Then(PradOp.MeanOp);
+
+        // Calculate global curvature (stability measure)
+        var globalCurvature = curvatureField.Then(PradOp.MeanOp);
+
+        // Calculate global alignment (coherence measure)
+        var globalAlignment = alignmentField.Then(PradOp.MeanOp);
+
+        // Calculate belief stability through field smoothness
+        var beliefStability = vectorField.Then(v => {
+            var laplacian = CalculateFieldLaplacian(v);
+            return laplacian.Then(PradOp.MeanOp);
+        });
+
+        // Calculate overall coherence through field structure
+        var coherence = vectorField.Then(v => {
+            var meanVector = v.Then(PradOp.MeanOp);
+            var alignment = v.MatMul(meanVector.Result);
+            return alignment.Then(PradOp.MeanOp);
+        });
+
+        return new FieldMetrics
+        {
+            GlobalEntropy = globalEntropy.Result.Data[0],
+            GlobalCurvature = globalCurvature.Result.Data[0],
+            GlobalAlignment = globalAlignment.Result.Data[0],
+            BeliefStability = 1.0f / (1.0f + beliefStability.Result.Data[0]),  // Inverse of Laplacian magnitude
+            CoherenceScore = coherence.Result.Data[0]
+        };
+    }
+
+    private PradResult CalculateFieldLaplacian(PradOp field)
+    {
+        // Compute discrete Laplacian of the field
+        // This measures the second spatial derivative, indicating field smoothness
+        var shape = field.CurrentShape;
+        var laplacian = new double[shape[0] * shape[1]];
+
+        for (int i = 1; i < shape[0] - 1; i++)
+        {
+            for (int j = 1; j < shape[1] - 1; j++)
+            {
+                int idx = i * shape[1] + j;
+                
+                // Center point
+                double center = field.CurrentTensor.Data[idx];
+                
+                // Adjacent points
+                double up = field.CurrentTensor.Data[(i-1) * shape[1] + j];
+                double down = field.CurrentTensor.Data[(i+1) * shape[1] + j];
+                double left = field.CurrentTensor.Data[i * shape[1] + (j-1)];
+                double right = field.CurrentTensor.Data[i * shape[1] + (j+1)];
+                
+                // Discrete Laplacian
+                laplacian[idx] = (up + down + left + right - 4 * center);
+            }
+        }
+
+        return new PradOp(new Tensor(shape, laplacian));
     }
 }
 
