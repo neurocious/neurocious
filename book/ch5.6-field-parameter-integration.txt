@@ -1,0 +1,303 @@
+Chapter 5.6 — Regime Detection and Transition
+
+The ability to detect, predict, and navigate regime changes is crucial for a belief system that operates in complex domains. This chapter explores how the SPN-VAE system implements regime awareness and transition management.
+
+1. Core Regime Classes
+
+The system models regimes and transitions as explicit structures:
+
+```csharp
+public class RegimePredictor
+{
+    public class RegimeTransition
+    {
+        public string FromRegimeId { get; init; }
+        public string ToRegimeId { get; init; }
+        public FieldParameters BeforeParams { get; init; }
+        public FieldParameters AfterParams { get; init; }
+        public SignalType[] SignalHistory { get; init; }
+        public float ReturnOutcome { get; init; }
+    }
+
+    public class RegimeForecast
+    {
+        public string PredictedRegimeId { get; init; }
+        public float Probability { get; init; }
+        public float ExpectedHalfLife { get; init; }
+        public List<(string regimeId, float probability)> TopPaths { get; init; }
+        public Dictionary<SignalType, float> SignalTypeWeights { get; init; }
+    }
+
+    private readonly PradOp transitionModel;
+    private readonly Queue<RegimeTransition> transitionHistory;
+    
+    private float EstimateRegimeHalfLife(FieldParameters params, Tensor prediction)
+    {
+        // Base half-life calculation
+        float baseHalfLife = 1.0f / (1.0f + params.Curvature + params.Entropy);
+        
+        // Adjust for predicted regime stability
+        float stabilityFactor = prediction.Data.Max();  // Confidence in prediction
+        
+        // Scale by historical decay rates
+        float historicalDecay = CalculateHistoricalDecayRate();
+        
+        return baseHalfLife * stabilityFactor * (1.0f / historicalDecay);
+    }
+}
+```
+
+2. Regime Detection and Analysis
+
+The system actively monitors for regime characteristics and transitions:
+
+```csharp
+public class RegimeDetector
+{
+    private readonly Dictionary<string, RegimeProfile> regimeProfiles;
+    private readonly Dictionary<string, List<float>> fieldHistory;
+
+    public RegimeChangeEvent DetectRegimeChange(
+        FieldParameters currentParams, 
+        FieldParameters previousParams,
+        float[] narrativeVector)
+    {
+        // Calculate field parameter changes
+        float entropyChange = currentParams.Entropy - previousParams.Entropy;
+        float curvatureChange = currentParams.Curvature - previousParams.Curvature;
+        float alignmentChange = Math.Abs(currentParams.Alignment - previousParams.Alignment);
+
+        // Check for significant changes
+        bool significantChange = 
+            entropyChange > ENTROPY_THRESHOLD ||
+            curvatureChange > CURVATURE_THRESHOLD ||
+            alignmentChange > ALIGNMENT_THRESHOLD;
+
+        if (!significantChange)
+            return null;
+
+        // Find nearest regime center
+        var nearestRegime = FindNearestRegime(narrativeVector);
+        
+        // Calculate transition probability
+        float transitionProb = CalculateTransitionProbability(
+            currentParams, previousParams, nearestRegime);
+
+        // Generate explanation
+        string explanation = GenerateTransitionExplanation(
+            currentParams, previousParams, nearestRegime);
+
+        return new RegimeChangeEvent
+        {
+            FromRegimeId = GetCurrentRegimeId(),
+            ToRegimeId = nearestRegime.RegimeId,
+            TransitionProbability = transitionProb,
+            FieldChanges = new FieldChangeMetrics
+            {
+                EntropyChange = entropyChange,
+                CurvatureChange = curvatureChange,
+                AlignmentChange = alignmentChange
+            },
+            Explanation = explanation
+        };
+    }
+
+    private RegimeProfile FindNearestRegime(float[] narrativeVector)
+    {
+        return regimeProfiles.Values
+            .OrderByDescending(r => 
+                CalculateNarrativeCorrelation(narrativeVector, r.NarrativeCenter))
+            .First();
+    }
+
+    private float CalculateTransitionProbability(
+        FieldParameters current,
+        FieldParameters previous,
+        RegimeProfile targetRegime)
+    {
+        // Calculate geometric distance in field parameter space
+        float parameterDistance = CalculateFieldDistance(current, targetRegime.FieldFingerprint);
+        
+        // Calculate narrative alignment
+        float narrativeAlignment = current.Alignment * targetRegime.FieldFingerprint.Alignment;
+        
+        // Weight by stability metrics
+        float stabilityFactor = 1.0f / (1.0f + current.Curvature + current.Entropy);
+        
+        return stabilityFactor * Math.Exp(-parameterDistance) * (0.5f + 0.5f * narrativeAlignment);
+    }
+}
+```
+
+3. Transition Management
+
+When regime changes are detected, the system manages the transition process:
+
+```csharp
+public class RegimeTransitionManager
+{
+    private readonly SpatialProbabilityNetwork spn;
+    private readonly Queue<RegimeTransition> transitionBuffer;
+    private readonly Dictionary<string, RegimeState> activeRegimes;
+
+    public async Task<TransitionResult> ManageTransition(RegimeChangeEvent change)
+    {
+        // Record transition start
+        var transition = new RegimeTransition
+        {
+            FromRegimeId = change.FromRegimeId,
+            ToRegimeId = change.ToRegimeId,
+            BeforeParams = change.BeforeParams,
+            TransitionProbability = change.TransitionProbability
+        };
+
+        try
+        {
+            // Prepare for transition
+            await PrepareForTransition(transition);
+
+            // Execute transition
+            var result = await ExecuteTransition(transition);
+
+            // Validate transition
+            if (await ValidateTransition(result))
+            {
+                // Commit transition
+                await CommitTransition(result);
+                return result;
+            }
+            else
+            {
+                // Rollback if validation fails
+                await RollbackTransition(transition);
+                return null;
+            }
+        }
+        catch (Exception ex)
+        {
+            await HandleTransitionFailure(transition, ex);
+            throw;
+        }
+    }
+
+    private async Task PrepareForTransition(RegimeTransition transition)
+    {
+        // Save current state
+        SaveCheckpoint();
+
+        // Notify dependent systems
+        await NotifyTransitionStart(transition);
+
+        // Pre-allocate resources for new regime
+        await PrepareNewRegimeResources(transition.ToRegimeId);
+    }
+
+    private async Task<TransitionResult> ExecuteTransition(RegimeTransition transition)
+    {
+        // Calculate transition path
+        var path = CalculateTransitionPath(
+            transition.BeforeParams,
+            transition.TargetParams);
+
+        // Execute transition steps
+        foreach (var step in path)
+        {
+            await ExecuteTransitionStep(step);
+            await ValidateStepOutcome(step);
+        }
+
+        return new TransitionResult
+        {
+            Success = true,
+            FinalParams = GetCurrentFieldParams(),
+            TransitionPath = path
+        };
+    }
+
+    private async Task<bool> ValidateTransition(TransitionResult result)
+    {
+        // Check field parameter stability
+        bool stableFields = await CheckFieldStability();
+
+        // Verify narrative coherence
+        bool coherentNarrative = await VerifyNarrativeCoherence();
+
+        // Confirm regime characteristics
+        bool regimeMatch = await ConfirmRegimeCharacteristics();
+
+        return stableFields && coherentNarrative && regimeMatch;
+    }
+}
+```
+
+4. Transition Visualization and Explanation
+
+The system can explain and visualize regime transitions:
+
+```csharp
+public class TransitionVisualizer
+{
+    public string GenerateTransitionReport(RegimeTransition transition)
+    {
+        var report = new StringBuilder();
+
+        // Field parameter changes
+        report.AppendLine("Field Parameter Changes:");
+        report.AppendLine($"Entropy: {transition.BeforeParams.Entropy:F2} -> {transition.AfterParams.Entropy:F2}");
+        report.AppendLine($"Curvature: {transition.BeforeParams.Curvature:F2} -> {transition.AfterParams.Curvature:F2}");
+        report.AppendLine($"Alignment: {transition.BeforeParams.Alignment:F2} -> {transition.AfterParams.Alignment:F2}");
+
+        // Transition characteristics
+        report.AppendLine("\nTransition Analysis:");
+        report.AppendLine($"Probability: {transition.TransitionProbability:P1}");
+        report.AppendLine($"Expected Duration: {transition.ExpectedDuration:F1} steps");
+        report.AppendLine($"Stability Score: {CalculateStabilityScore(transition):F2}");
+
+        // Regime comparison
+        report.AppendLine("\nRegime Comparison:");
+        foreach (var (metric, values) in CompareRegimeMetrics(transition))
+        {
+            report.AppendLine($"{metric}: {values.before:F2} -> {values.after:F2}");
+        }
+
+        return report.ToString();
+    }
+
+    private float CalculateStabilityScore(RegimeTransition transition)
+    {
+        // Combine multiple stability factors
+        float fieldStability = 1.0f / (1.0f + 
+            transition.AfterParams.Curvature + 
+            transition.AfterParams.Entropy);
+
+        float narrativeCoherence = Math.Abs(transition.AfterParams.Alignment);
+
+        float historicalReliability = CalculateHistoricalReliability(
+            transition.FromRegimeId, 
+            transition.ToRegimeId);
+
+        return (fieldStability + narrativeCoherence + historicalReliability) / 3.0f;
+    }
+}
+```
+
+This regime-aware architecture enables:
+
+1. Proactive Regime Management
+   - Detection of impending regime changes
+   - Preparation for transitions
+   - Validation of transition outcomes
+
+2. Stable Transitions
+   - Careful parameter evolution
+   - Coherence maintenance
+   - Rollback capabilities
+
+3. Explainable Changes
+   - Detailed transition metrics
+   - Visual representation
+   - Natural language explanations
+
+The result is a system that can not only detect different belief regimes but actively manage transitions between them while maintaining coherence and stability.
+
+In the next chapter, we'll explore how this entire architecture comes together in practical applications of computational epistemology.
