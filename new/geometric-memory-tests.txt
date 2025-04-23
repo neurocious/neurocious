@@ -1,0 +1,277 @@
+public class GeometricMemoryTests
+{
+    private readonly SpatialProbabilityNetwork spn;
+    private readonly EnhancedVAE vae;
+    private const float EPSILON = 1e-6f;
+
+    public GeometricMemoryTests()
+    {
+        vae = new MockEnhancedVAE();
+        spn = new SpatialProbabilityNetwork(
+            vae: vae,
+            stateDim: 10,
+            fieldShape: new[] { 16, 16 },
+            vectorDim: 4,
+            bufferSize: 5
+        );
+    }
+
+    [Fact]
+    public void StorageWithoutCatastrophicForgetting()
+    {
+        // Arrange - Create initial information to store
+        var originalState = CreateRandomState(10);
+        var (originalRouting, originalConfidence, _, _, _, originalParams, _) = spn.ProcessState(originalState);
+
+        // Store the first piece of information
+        var reward = new PradOp(new Tensor(new[] { 1 }, new[] { 1.0 }));
+        spn.UpdateFields(originalRouting, reward, originalState);
+
+        // Store 10 new, different pieces of information
+        var newStates = Enumerable.Range(0, 10)
+            .Select(_ => CreateRandomState(10))
+            .ToList();
+
+        foreach (var state in newStates)
+        {
+            var (routing, _, _, _, _, _, _) = spn.ProcessState(state);
+            spn.UpdateFields(routing, reward, state);
+        }
+
+        // Act - Check if original information is still accessible
+        var (finalRouting, finalConfidence, _, _, _, finalParams, _) = spn.ProcessState(originalState);
+
+        // Assert - Original information should still be retrievable with similar confidence
+        Assert.True(finalConfidence.Result.Data[0] >= originalConfidence.Result.Data[0] * 0.8f);
+        
+        // Field parameters should remain stable for original information
+        Assert.True(Math.Abs(finalParams.Curvature - originalParams.Curvature) < 0.2f);
+        Assert.True(Math.Abs(finalParams.Entropy - originalParams.Entropy) < 0.2f);
+    }
+
+    [Fact]
+    public void NaturalOrganizationOfRelatedInformation()
+    {
+        // Arrange - Create a set of related states (simulating similar information)
+        var baseState = CreateRandomState(10);
+        var relatedStates = Enumerable.Range(0, 5)
+            .Select(i => CreatePerturbedState(baseState, 0.2f)) // Small perturbations
+            .ToList();
+        var unrelatedState = CreateRandomState(10); // Different information
+
+        // Act - Store all states
+        var reward = new PradOp(new Tensor(new[] { 1 }, new[] { 1.0 }));
+        
+        foreach (var state in relatedStates.Concat(new[] { unrelatedState }))
+        {
+            var (routing, _, _, _, _, _, _) = spn.ProcessState(state);
+            spn.UpdateFields(routing, reward, state);
+        }
+
+        // Get field metrics for related and unrelated states
+        var (routingBase, _, _, _, _, paramsBase, _) = spn.ProcessState(baseState);
+        var (routingUnrelated, _, _, _, _, paramsUnrelated, _) = spn.ProcessState(unrelatedState);
+
+        // Assert
+        // Related states should have similar routing patterns
+        foreach (var state in relatedStates)
+        {
+            var (routing, _, _, _, _, _, _) = spn.ProcessState(state);
+            var similarity = CalculateCosineSimilarity(routing.Result.Data, routingBase.Result.Data);
+            Assert.True(similarity > 0.7f); // High similarity for related information
+        }
+
+        // Unrelated state should have different routing
+        var unrelatedSimilarity = CalculateCosineSimilarity(
+            routingUnrelated.Result.Data, 
+            routingBase.Result.Data
+        );
+        Assert.True(unrelatedSimilarity < 0.3f); // Low similarity for unrelated information
+    }
+
+    [Fact]
+    public void InformationRetrievalFidelity()
+    {
+        // Arrange - Store multiple pieces of information with distinct patterns
+        var states = new List<PradOp>();
+        var patterns = new List<double[]>();
+        
+        // Create distinct patterns
+        for (int i = 0; i < 5; i++)
+        {
+            var pattern = new double[10];
+            pattern[i * 2] = 1.0;     // Create distinct pattern
+            pattern[i * 2 + 1] = 0.5;
+            patterns.Add(pattern);
+            states.Add(new PradOp(new Tensor(new[] { 10 }, pattern)));
+        }
+
+        // Store all patterns
+        var reward = new PradOp(new Tensor(new[] { 1 }, new[] { 1.0 }));
+        foreach (var state in states)
+        {
+            var (routing, _, _, _, _, _, _) = spn.ProcessState(state);
+            spn.UpdateFields(routing, reward, state);
+        }
+
+        // Act & Assert - Test retrieval of each pattern
+        for (int i = 0; i < states.Count; i++)
+        {
+            // Create partial pattern for retrieval
+            var partialPattern = patterns[i].ToArray();
+            Array.Fill(partialPattern, 0, i * 2 + 2, 8); // Zero out most of pattern except distinctive part
+            
+            var retrievalState = new PradOp(new Tensor(new[] { 10 }, partialPattern));
+            var (routing, confidence, _, _, _, _, explanation) = spn.ProcessState(retrievalState);
+
+            // Should have high confidence in retrieval
+            Assert.True(confidence.Result.Data[0] > 0.7f);
+
+            // Should identify correct features
+            Assert.Contains($"feature_{i * 2}", explanation.TopContributingFeatures);
+            Assert.Contains($"feature_{i * 2 + 1}", explanation.TopContributingFeatures);
+        }
+    }
+
+    [Fact]
+    public void LongTermStorageStability()
+    {
+        // Arrange - Store initial information
+        var originalState = CreateRandomState(10);
+        var (originalRouting, _, _, _, _, originalParams, _) = spn.ProcessState(originalState);
+        
+        var reward = new PradOp(new Tensor(new[] { 1 }, new[] { 1.0 }));
+        spn.UpdateFields(originalRouting, reward, originalState);
+
+        // Act - Simulate long-term storage with many updates
+        for (int epoch = 0; epoch < 100; epoch++)
+        {
+            // Regular field updates with random states
+            var randomState = CreateRandomState(10);
+            var (routing, _, _, _, _, _, _) = spn.ProcessState(randomState);
+            spn.UpdateFields(routing, reward, randomState);
+
+            // Periodic reinforcement of original information (simulating occasional access)
+            if (epoch % 10 == 0)
+            {
+                var (refreshRouting, _, _, _, _, _, _) = spn.ProcessState(originalState);
+                spn.UpdateFields(refreshRouting, reward, originalState);
+            }
+        }
+
+        // Get final state
+        var (finalRouting, finalConfidence, _, _, _, finalParams, finalExplanation) = 
+            spn.ProcessState(originalState);
+
+        // Assert - Information should remain stable
+        Assert.True(finalConfidence.Result.Data[0] > 0.7f); // High confidence
+        Assert.True(finalParams.Entropy < originalParams.Entropy * 1.2f); // Entropy shouldn't increase much
+        Assert.True(finalParams.Curvature < originalParams.Curvature * 1.2f); // Stability maintained
+        
+        // Field coupling should maintain structure
+        var routingSimilarity = CalculateCosineSimilarity(
+            originalRouting.Result.Data,
+            finalRouting.Result.Data
+        );
+        Assert.True(routingSimilarity > 0.8f);
+    }
+
+    [Fact]
+    public void HierarchicalOrganizationEmergence()
+    {
+        // Arrange - Create hierarchical information structure
+        var categories = new[] { "A", "B", "C" };
+        var statesPerCategory = 5;
+        var hierarchicalStates = new Dictionary<string, List<PradOp>>();
+
+        // Create states with category-specific patterns
+        foreach (var category in categories)
+        {
+            hierarchicalStates[category] = new List<PradOp>();
+            var basePattern = CreateRandomState(10);
+            
+            for (int i = 0; i < statesPerCategory; i++)
+            {
+                hierarchicalStates[category].Add(CreatePerturbedState(basePattern, 0.1f));
+            }
+        }
+
+        // Store all states
+        var reward = new PradOp(new Tensor(new[] { 1 }, new[] { 1.0 }));
+        foreach (var category in hierarchicalStates)
+        {
+            foreach (var state in category.Value)
+            {
+                var (routing, _, _, _, _, _, _) = spn.ProcessState(state);
+                spn.UpdateFields(routing, reward, state);
+            }
+        }
+
+        // Act & Assert - Verify hierarchical organization
+        foreach (var category in hierarchicalStates)
+        {
+            var categoryRoutings = new List<double[]>();
+            
+            // Get routings for all states in category
+            foreach (var state in category.Value)
+            {
+                var (routing, _, _, _, _, _, _) = spn.ProcessState(state);
+                categoryRoutings.Add(routing.Result.Data);
+            }
+
+            // Intra-category similarity should be high
+            for (int i = 0; i < categoryRoutings.Count; i++)
+            {
+                for (int j = i + 1; j < categoryRoutings.Count; j++)
+                {
+                    var similarity = CalculateCosineSimilarity(
+                        categoryRoutings[i],
+                        categoryRoutings[j]
+                    );
+                    Assert.True(similarity > 0.7f); // High intra-category similarity
+                }
+            }
+
+            // Inter-category similarity should be low
+            foreach (var otherCategory in hierarchicalStates)
+            {
+                if (otherCategory.Key == category.Key) continue;
+
+                foreach (var otherState in otherCategory.Value)
+                {
+                    var (otherRouting, _, _, _, _, _, _) = spn.ProcessState(otherState);
+                    var similarity = CalculateCosineSimilarity(
+                        categoryRoutings[0],
+                        otherRouting.Result.Data
+                    );
+                    Assert.True(similarity < 0.3f); // Low inter-category similarity
+                }
+            }
+        }
+    }
+
+    private float CalculateCosineSimilarity(double[] v1, double[] v2)
+    {
+        var dot = v1.Zip(v2, (a, b) => a * b).Sum();
+        var norm1 = Math.Sqrt(v1.Sum(x => x * x));
+        var norm2 = Math.Sqrt(v2.Sum(x => x * x));
+        return (float)(dot / (norm1 * norm2));
+    }
+
+    private PradOp CreateRandomState(int dim, float scale = 1.0f)
+    {
+        var random = new Random();
+        var data = new double[dim];
+        for (int i = 0; i < dim; i++)
+        {
+            data[i] = (random.NextDouble() * 2 - 1) * scale;
+        }
+        return new PradOp(new Tensor(new[] { dim }, data));
+    }
+
+    private PradOp CreatePerturbedState(PradOp baseState, float perturbationScale)
+    {
+        var perturbation = CreateRandomState(baseState.Result.Shape[0], perturbationScale);
+        return new PradOp(baseState.Add(perturbation.Result).Result);
+    }
+}
