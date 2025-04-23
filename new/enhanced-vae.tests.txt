@@ -1,0 +1,478 @@
+using Xunit;
+using ParallelReverseAutoDiff.PRAD;
+
+public class EnhancedVAETests
+{
+    private readonly EnhancedVAE vae;
+    private readonly int batchSize = 8;
+    private readonly int sequenceLength = 16;
+    private readonly int inputDim = 784;
+
+    public EnhancedVAETests()
+    {
+        vae = new EnhancedVAE();
+    }
+
+    [Fact]
+    public void InitializationTest()
+    {
+        // Simply creating a new instance and ensuring no exceptions
+        var instance = new EnhancedVAE();
+        Assert.NotNull(instance);
+    }
+
+    [Fact]
+    public void EncoderTest()
+    {
+        // Create a test sequence
+        var sequence = CreateTestSequence();
+
+        // Encode sequence
+        var (mean, logVar) = vae.EncodeSequence(sequence);
+
+        // Verify output dimensions
+        Assert.Equal(32, mean.Result.Shape[0]);  // LATENT_DIM
+        Assert.Equal(32, logVar.Result.Shape[0]); // LATENT_DIM
+    }
+
+    [Fact]
+    public void DecoderTest()
+    {
+        // Create a test latent vector
+        var latentVector = new PradOp(new Tensor(new[] { 32 }, new double[32]));  // Zero vector for testing
+
+        // Decode
+        var (reconstruction, fieldParams) = vae.DecodeWithField(latentVector);
+
+        // Verify output dimensions
+        Assert.Equal(784, reconstruction.Result.Shape[0]);  // INPUT_DIM
+        Assert.Equal(3, fieldParams.ToTensor().Shape[0]);  // 3 field parameters
+
+        // Verify field parameter bounds
+        Assert.True(fieldParams.Curvature >= 0);  // ReLU ensures non-negative
+        Assert.True(fieldParams.Entropy >= 0 && fieldParams.Entropy <= 1);  // Sigmoid bounds
+        Assert.True(fieldParams.Alignment >= -1 && fieldParams.Alignment <= 1);  // Tanh bounds
+    }
+
+    [Fact]
+    public void ForwardPassTest()
+    {
+        // Create test sequence
+        var sequence = CreateTestSequence();
+
+        // Forward pass
+        var (reconstruction, fieldParams, mean, logVar) = vae.ForwardSequence(sequence);
+
+        // Verify outputs
+        Assert.NotNull(reconstruction);
+        Assert.NotNull(fieldParams);
+        Assert.NotNull(mean);
+        Assert.NotNull(logVar);
+
+        // Check dimensions
+        Assert.Equal(784, reconstruction.Result.Shape[0]);
+        Assert.Equal(3, fieldParams.ToTensor().Shape[0]);
+        Assert.Equal(32, mean.Result.Shape[0]);
+        Assert.Equal(32, logVar.Result.Shape[0]);
+    }
+
+    [Fact]
+    public void AttentionBlockTest()
+    {
+        var block = new AttentionBlock(256);  // HIDDEN_DIM
+        var input = new PradOp(new Tensor(new[] { 256 }, new double[256]));
+
+        var output = block.Forward(input);
+
+        Assert.Equal(256, output.Result.Shape[0]);
+    }
+
+    [Fact]
+    public void FieldParametersTest()
+    {
+        var fieldValues = new[] { 0.5, 0.3, -0.7 };
+        var tensor = new Tensor(new[] { 3 }, fieldValues);
+        var fieldParams = new FieldParameters(tensor);
+
+        Assert.Equal(fieldValues[0], fieldParams.Curvature);
+        Assert.Equal(fieldValues[1], fieldParams.Entropy);
+        Assert.Equal(fieldValues[2], fieldParams.Alignment);
+
+        // Test conversion back to tensor
+        var converted = fieldParams.ToTensor();
+        Assert.Equal(fieldValues[0], converted.Data[0]);
+        Assert.Equal(fieldValues[1], converted.Data[1]);
+        Assert.Equal(fieldValues[2], converted.Data[2]);
+    }
+
+    [Fact]
+    public void FieldRegularizerTest()
+    {
+        var regularizer = new FieldRegularizer();
+        var fieldParams = new FieldParameters(new Tensor(new[] { 3 }, new[] { 0.5, 0.3, -0.7 }));
+
+        var loss = regularizer.ComputeLoss(fieldParams);
+
+        Assert.NotNull(loss);
+        Assert.Equal(1, loss.Result.Shape.Length);
+        Assert.True(loss.Result.Data[0] >= 0);  // Loss should be non-negative
+    }
+
+    [Fact]
+    public void TrainingTest()
+    {
+        // Create small training dataset
+        var sequenceData = new List<List<Tensor>>();
+        for (int i = 0; i < batchSize; i++)
+        {
+            var sequence = new List<Tensor>();
+            for (int j = 0; j < sequenceLength; j++)
+            {
+                sequence.Add(new Tensor(new[] { inputDim }, new double[inputDim]));
+            }
+            sequenceData.Add(sequence);
+        }
+
+        // Training should complete without exceptions
+        vae.Train(sequenceData, epochs: 2, batchSize: 4);
+    }
+
+    [Theory]
+    [InlineData(0.5)]
+    [InlineData(1.0)]
+    [InlineData(2.0)]
+    public void LatentCurvatureEstimationTest(double epsilon)
+    {
+        var z = new Tensor(new[] { 32 }, new double[32]);  // Zero vector
+        var curvature = vae.EstimateLatentCurvature(z);
+
+        Assert.True(curvature >= 0);  // Curvature should be non-negative
+    }
+
+    [Fact]
+    public void LatentEntropyEstimationTest()
+    {
+        var z = new Tensor(new[] { 32 }, new double[32]);  // Zero vector
+        var entropy = vae.EstimateLatentEntropy(z);
+
+        Assert.True(entropy >= 0);  // Entropy should be non-negative
+    }
+
+    private List<PradOp> CreateTestSequence()
+    {
+        var sequence = new List<PradOp>();
+        for (int i = 0; i < sequenceLength; i++)
+        {
+            sequence.Add(new PradOp(new Tensor(new[] { inputDim }, new double[inputDim])));
+        }
+        return sequence;
+    }
+}
+
+public class AttentionBlockTests
+{
+    private readonly int hiddenDim = 256;
+    private readonly int numHeads = 4;
+
+    [Fact]
+    public void InitializationTest()
+    {
+        var block = new AttentionBlock(hiddenDim, numHeads);
+        
+        Assert.NotNull(block.QueryProj);
+        Assert.NotNull(block.KeyProj);
+        Assert.NotNull(block.ValueProj);
+        Assert.NotNull(block.OutputProj);
+        Assert.NotNull(block.LayerNorm);
+    }
+
+    [Fact]
+    public void ForwardPassDimensionsTest()
+    {
+        var block = new AttentionBlock(hiddenDim);
+        var input = new PradOp(new Tensor(new[] { hiddenDim }, new double[hiddenDim]));
+
+        var output = block.Forward(input);
+
+        Assert.Equal(hiddenDim, output.Result.Shape[0]);
+    }
+
+    [Fact]
+    public void ResidualConnectionTest()
+    {
+        var block = new AttentionBlock(hiddenDim);
+        var input = new PradOp(new Tensor(new[] { hiddenDim }, Enumerable.Repeat(1.0, hiddenDim).ToArray()));
+
+        var output = block.Forward(input);
+
+        // Due to residual connection, output should not be zero
+        Assert.True(output.Result.Data.Any(x => Math.Abs(x) > 1e-6));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void TrainingModeTest(bool training)
+    {
+        var block = new AttentionBlock(hiddenDim);
+        var input = new PradOp(new Tensor(new[] { hiddenDim }, new double[hiddenDim]));
+
+        var output = block.Forward(input, training);
+
+        Assert.NotNull(output);
+        Assert.Equal(hiddenDim, output.Result.Shape[0]);
+    }
+
+    [Fact]
+    public void MultiHeadAttentionTest()
+    {
+        var block = new AttentionBlock(hiddenDim, numHeads: 8);  // Test with more heads
+        var input = new PradOp(new Tensor(new[] { hiddenDim }, new double[hiddenDim]));
+
+        var output = block.Forward(input);
+
+        Assert.Equal(hiddenDim, output.Result.Shape[0]);
+    }
+}
+
+public class FieldParametersTests
+{
+    [Fact]
+    public void ConstructorTest()
+    {
+        var values = new[] { 0.5, 0.3, -0.7 };
+        var tensor = new Tensor(new[] { 3 }, values);
+        var fieldParams = new FieldParameters(tensor);
+
+        Assert.Equal(values[0], fieldParams.Curvature);
+        Assert.Equal(values[1], fieldParams.Entropy);
+        Assert.Equal(values[2], fieldParams.Alignment);
+    }
+
+    [Fact]
+    public void ToTensorTest()
+    {
+        var values = new[] { 0.5, 0.3, -0.7 };
+        var tensor = new Tensor(new[] { 3 }, values);
+        var fieldParams = new FieldParameters(tensor);
+
+        var result = fieldParams.ToTensor();
+
+        Assert.Equal(3, result.Shape[0]);
+        Assert.Equal(values[0], result.Data[0]);
+        Assert.Equal(values[1], result.Data[1]);
+        Assert.Equal(values[2], result.Data[2]);
+    }
+
+    [Theory]
+    [InlineData(0.0, 0.0, 0.0)]
+    [InlineData(1.0, 1.0, 1.0)]
+    [InlineData(-1.0, 0.5, -0.5)]
+    public void ParameterRangeTest(double curvature, double entropy, double alignment)
+    {
+        var tensor = new Tensor(new[] { 3 }, new[] { curvature, entropy, alignment });
+        var fieldParams = new FieldParameters(tensor);
+
+        // Test if parameters are properly bounded
+        Assert.True(fieldParams.Curvature >= 0);  // Non-negative
+        Assert.True(fieldParams.Entropy >= 0 && fieldParams.Entropy <= 1);  // [0,1]
+        Assert.True(fieldParams.Alignment >= -1 && fieldParams.Alignment <= 1);  // [-1,1]
+    }
+}
+
+public class FieldRegularizerTests
+{
+    private readonly FieldRegularizer regularizer;
+
+    public FieldRegularizerTests()
+    {
+        regularizer = new FieldRegularizer();
+    }
+
+    [Fact]
+    public void ComputeLossBasicTest()
+    {
+        var fieldParams = new FieldParameters(new Tensor(new[] { 3 }, new[] { 0.5, 0.3, -0.7 }));
+        var loss = regularizer.ComputeLoss(fieldParams);
+
+        Assert.NotNull(loss);
+        Assert.Single(loss.Result.Shape);
+        Assert.True(loss.Result.Data[0] >= 0);
+    }
+
+    [Theory]
+    [InlineData(0.0, 0.5, 0.0)]  // Minimal regularization
+    [InlineData(2.0, 1.5, 1.0)]  // High regularization
+    [InlineData(0.5, 0.5, 0.5)]  // Moderate regularization
+    public void RegularizationStrengthTest(double curvature, double entropy, double alignment)
+    {
+        var fieldParams = new FieldParameters(new Tensor(new[] { 3 }, new[] { curvature, entropy, alignment }));
+        var loss = regularizer.ComputeLoss(fieldParams);
+
+        // Higher parameter values should result in higher loss
+        var highFieldParams = new FieldParameters(new Tensor(new[] { 3 }, new[] { curvature * 2, entropy, alignment * 2 }));
+        var highLoss = regularizer.ComputeLoss(highFieldParams);
+
+        Assert.True(highLoss.Result.Data[0] >= loss.Result.Data[0]);
+    }
+
+    [Fact]
+    public void EntropyBoundsTest()
+    {
+        // Test entropy outside [0,1] is penalized
+        var lowEntropy = new FieldParameters(new Tensor(new[] { 3 }, new[] { 0.5, -0.1, 0.0 }));
+        var highEntropy = new FieldParameters(new Tensor(new[] { 3 }, new[] { 0.5, 1.1, 0.0 }));
+        var goodEntropy = new FieldParameters(new Tensor(new[] { 3 }, new[] { 0.5, 0.5, 0.0 }));
+
+        var lowLoss = regularizer.ComputeLoss(lowEntropy);
+        var highLoss = regularizer.ComputeLoss(highEntropy);
+        var goodLoss = regularizer.ComputeLoss(goodEntropy);
+
+        Assert.True(lowLoss.Result.Data[0] > goodLoss.Result.Data[0]);
+        Assert.True(highLoss.Result.Data[0] > goodLoss.Result.Data[0]);
+    }
+}
+
+public class AdvancedVAETests
+{
+    private readonly EnhancedVAE vae;
+    private readonly Random random = new Random(42);
+    private readonly int inputDim = 784;
+    private readonly int sequenceLength = 16;
+
+    public AdvancedVAETests()
+    {
+        vae = new EnhancedVAE();
+    }
+
+    [Fact]
+    public void KLDivergenceAnnealingTest()
+    {
+        // Create test sequence
+        var sequence = CreateTestSequence();
+        var (mean, logVar) = vae.EncodeSequence(sequence);
+
+        // Test KL weight annealing
+        var epochLosses = new List<double>();
+        for (int epoch = 0; epoch < 100; epoch += 10)
+        {
+            var loss = vae.ComputeLoss(
+                new List<Tensor> { sequence[0].Result },
+                new PradOp(new Tensor(mean.Result.Shape, new double[mean.Result.Data.Length])).Result,
+                new FieldParameters(new Tensor(new[] { 3 }, new[] { 0.5, 0.3, 0.7 })),
+                mean,
+                logVar,
+                epoch
+            );
+            epochLosses.Add(loss.Result.Data[0]);
+        }
+
+        // KL weight should increase over epochs
+        for (int i = 1; i < epochLosses.Count; i++)
+        {
+            Assert.True(epochLosses[i] >= epochLosses[i-1]);
+        }
+    }
+
+    [Fact]
+    public void PatternReconstructionTest()
+    {
+        // Create sinusoidal pattern
+        var pattern = new double[784];
+        for (int i = 0; i < pattern.Length; i++)
+        {
+            pattern[i] = Math.Sin(i * Math.PI / 50.0);
+        }
+        var input = new List<PradOp> { new PradOp(new Tensor(new[] { 784 }, pattern)) };
+
+        // Reconstruct
+        var (reconstruction, _, _, _) = vae.ForwardSequence(input);
+
+        // Verify reconstruction quality
+        var mse = pattern.Zip(reconstruction.Result.Data, (a, b) => Math.Pow(a - b, 2)).Average();
+        Assert.True(mse < 1.0);
+    }
+
+    [Fact]
+    public void LatentSpaceInterpolationTest()
+    {
+        // Create two different patterns
+        var pattern1 = new double[784].Select(_ => random.NextDouble()).ToArray();
+        var pattern2 = new double[784].Select(_ => random.NextDouble()).ToArray();
+        
+        var input1 = new List<PradOp> { new PradOp(new Tensor(new[] { 784 }, pattern1)) };
+        var input2 = new List<PradOp> { new PradOp(new Tensor(new[] { 784 }, pattern2)) };
+
+        // Get latent codes
+        var (_, _, mean1, _) = vae.ForwardSequence(input1);
+        var (_, _, mean2, _) = vae.ForwardSequence(input2);
+
+        // Interpolate
+        var alpha = 0.5;
+        var interpolated = new PradOp(new Tensor(
+            mean1.Result.Shape,
+            mean1.Result.Data.Zip(mean2.Result.Data, (a, b) => a * (1 - alpha) + b * alpha).ToArray()
+        ));
+
+        // Decode interpolated point
+        var (reconstruction, fieldParams) = vae.DecodeWithField(interpolated);
+
+        // Verify outputs
+        Assert.Equal(784, reconstruction.Result.Shape[0]);
+        Assert.True(fieldParams.Curvature >= 0);
+        Assert.True(fieldParams.Entropy >= 0 && fieldParams.Entropy <= 1);
+        Assert.True(fieldParams.Alignment >= -1 && fieldParams.Alignment <= 1);
+    }
+
+    [Fact]
+    public void NumericalStabilityTest()
+    {
+        // Test with extreme values
+        var extremeSequence = new List<PradOp>();
+        for (int i = 0; i < sequenceLength; i++)
+        {
+            var data = new double[inputDim];
+            Array.Fill(data, i % 2 == 0 ? 1e6 : 1e-6);
+            extremeSequence.Add(new PradOp(new Tensor(new[] { inputDim }, data)));
+        }
+
+        // Should handle extreme values
+        var (mean, logVar) = vae.EncodeSequence(extremeSequence);
+        Assert.False(mean.Result.Data.Any(double.IsNaN));
+        Assert.False(mean.Result.Data.Any(double.IsInfinity));
+        Assert.False(logVar.Result.Data.Any(double.IsNaN));
+        Assert.False(logVar.Result.Data.Any(double.IsInfinity));
+    }
+
+    [Fact]
+    public void ContrastiveLearningTest()
+    {
+        // Create similar and dissimilar inputs
+        var basePattern = new double[inputDim];
+        Array.Fill(basePattern, 0.5);
+        
+        var similarPattern = basePattern.Select(x => x + random.NextDouble() * 0.1).ToArray();
+        var dissimilarPattern = new double[inputDim].Select(_ => random.NextDouble()).ToArray();
+
+        var inputs = new List<Tensor> {
+            new Tensor(new[] { inputDim }, basePattern),
+            new Tensor(new[] { inputDim }, similarPattern),
+            new Tensor(new[] { inputDim }, dissimilarPattern)
+        };
+
+        // Get representations
+        var sequence = inputs.Select(x => new PradOp(x)).ToList();
+        var (_, _, mean, _) = vae.ForwardSequence(sequence);
+
+        // Test contrastive loss
+        var loss = vae.ComputeContrastiveLoss(mean, inputs);
+        Assert.True(loss.Result.Data[0] > 0);
+    }
+
+    private List<PradOp> CreateTestSequence()
+    {
+        return Enumerable.Range(0, sequenceLength)
+            .Select(_ => new PradOp(new Tensor(new[] { inputDim }, new double[inputDim])))
+            .ToList();
+    }
+}
