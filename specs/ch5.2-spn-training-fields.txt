@@ -1,0 +1,162 @@
+5.2 Training Fields in the SPN
+The Spatial Probability Network (SPN) is not just a static routing mechanism. It is a dynamic belief engine, capable of learning and reshaping how information flows through a conceptual space. Its power lies in its vector fields — directional belief gradients — and in its probability fields — epistemic certainties distributed across regions of thought.
+
+To make these fields meaningful, they must be trained. In this chapter, we explore how vector and probability fields within the SPN learn through interaction, reward, and exploration. Three key mechanisms underlie this learning process: Hebbian adjustment, reinforcement-driven flow adaptation, and entropy-guided exploration.
+
+Hebbian Adjustment: Learning Through Co-Activation
+At the heart of SPN field learning lies a modern take on a classic principle: cells that fire together, wire together. In the SPN, beliefs that are consistently routed together become causally and topologically associated. When a particular latent input activates a region of the vector field — and that activation leads to successful reasoning or reward — the directional alignment of the vectors in that region is strengthened.
+
+Mathematically, the adjustment to the vector field V(x) at location x is proportional to the cosine similarity between the incoming belief vector and the existing field orientation, scaled by the success of that routing:
+
+Δ
+𝑉
+(
+𝑥
+)
+∝
+𝛼
+⋅
+cos_sim
+(
+𝑧
+,
+𝑉
+(
+𝑥
+)
+)
+⋅
+𝑅
+ΔV(x)∝α⋅cos_sim(z,V(x))⋅R
+Where:
+
+z is the input latent belief vector,
+
+V(x) is the current directional field vector at position x,
+
+R is the reward or epistemic reinforcement signal,
+
+α is a learning rate or plasticity factor.
+
+Over time, this creates a vector field landscape where high-traffic routes — belief paths that lead to effective reasoning or successful predictions — become smoother, stronger, and more stable.
+
+Reinforcement-Driven Flow Adaptation
+The SPN integrates with reinforcement signals to adapt not only directionality but also the probability field that governs routing behavior. In this context, reinforcement learning is not merely about maximizing future reward — it’s about shaping the geometry of belief space to reflect causally productive reasoning.
+
+Each routing decision made by the SPN can be viewed as a probabilistic selection from a distribution over possible belief flows. After a decision is made and feedback is received, the probability field P(x) is updated to reflect the utility of the path taken.
+
+Update dynamics are governed by a combination of temporal difference learning and topological influence:
+
+𝑃
+𝑡
++
+1
+(
+𝑥
+)
+=
+(
+1
+−
+𝛽
+)
+⋅
+𝑃
+𝑡
+(
+𝑥
+)
++
+𝛽
+⋅
+𝑃
+^
+𝑡
+(
+𝑥
+)
+P 
+t+1
+​
+ (x)=(1−β)⋅P 
+t
+​
+ (x)+β⋅ 
+P
+^
+  
+t
+​
+ (x)
+Where:
+
+P_t(x) is the current probability at location x,
+
+β is the update rate (often annealed over time),
+
+\hat{P}_t(x) is the posterior belief routing probability given observed reward,
+
+Optionally adjusted by a regime-dependent decay or transition matrix.
+
+This feedback loop allows the SPN to prioritize certain epistemic paths over others — not by fiat, but by experience.
+
+Exploration and Entropy Dynamics
+A key aspect of SPN training is balancing exploitation of known good belief flows with exploration of new or uncertain epistemic routes. This is mediated by local entropy measurements.
+
+Entropy in the SPN is a measure of epistemic uncertainty — high entropy in a region of belief space indicates that the model is unsure how to route beliefs through that area. Rather than avoid these areas, the SPN can be configured to actively explore them, using entropy as a curiosity signal.
+
+The exploration policy is shaped by an entropy-guided modulation term:
+
+𝐸
+(
+𝑥
+)
+=
+−
+∑
+𝑖
+𝑃
+𝑖
+(
+𝑥
+)
+log
+⁡
+𝑃
+𝑖
+(
+𝑥
+)
+E(x)=− 
+i
+∑
+​
+ P 
+i
+​
+ (x)logP 
+i
+​
+ (x)
+This entropy term is then used to:
+
+Scale noise injected into the vector field,
+
+Adjust learning rates dynamically (higher entropy → higher plasticity),
+
+Trigger branching into belief-space "forks" when uncertainty exceeds a threshold.
+
+This enables the SPN to grow its understanding, not just reinforce it. It explores unstable regions of belief space, maps out their topology, and prunes or strengthens paths based on observed coherence and causal productivity.
+
+Summary
+SPN field training is the engine of epistemic learning. It evolves vector and probability fields through:
+
+Hebbian co-activation, strengthening directional consistency between belief states and useful trajectories.
+
+Reinforcement-driven adaptation, shaping belief flow according to reward, coherence, and predictive accuracy.
+
+Entropy-based exploration, enabling discovery of new conceptual territories where understanding is still forming.
+
+This learning process is not static; it is active, adaptive, and recursive. Belief space becomes a living geometry — one that continuously reshapes itself based on what the system encounters, what it understands, and what it dares to question.
+
+Next, we turn to how these trained fields integrate with latent representation models — through the Enhanced VAE — to form a unified architecture of computational belief.

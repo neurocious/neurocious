@@ -1,0 +1,25 @@
+5.6 Field Parameter Integration
+Routing with Causal Field Overlays
+In standard machine learning pipelines, decisions are routed through layers via static weights and activations. In the SPN-VAE architecture, however, decision routing is dynamically governed by field parameters — specifically curvature, entropy, and alignment — which define local geometric and probabilistic characteristics in the belief space.
+
+The Spatial Probability Network (SPN) doesn't merely map inputs to outputs. It interprets latent states as locations in a dynamic vector field, where belief flows are directed according to local causality. These flows are shaped by causal field overlays — dynamic transformations that steer routing paths based on inferred or learned relationships.
+
+Curvature modulates the degree of redirection a belief flow experiences. High curvature represents unstable regimes — epistemic “bends” where beliefs are less stable and may transition.
+
+Entropy governs routing uncertainty. Flat, high-entropy regions represent narrative ambiguity or cognitive indecision. Routing through such zones invites exploration, but weakens conviction.
+
+Alignment captures directional coherence — how strongly a latent vector aligns with dominant belief currents. High alignment implies strong narrative integration or epistemic agreement.
+
+By integrating these parameters as overlays, the SPN dynamically routes inference paths not just toward maximally probable outcomes, but toward causally coherent, topologically smooth conclusions. In this way, belief computation becomes a function of navigating structured thought space rather than simply computing prediction scores.
+
+Conviction and Belief Stability Modulation
+Conviction, as defined earlier, emerges from the interplay between entropy, curvature, and alignment. But beyond acting as a diagnostic quantity, conviction also serves as a modulator within the SPN-VAE framework. It biases routing paths, alters gradient updates, and affects sampling behavior in latent trajectories.
+
+Routing Biasing: High conviction amplifies alignment and reduces entropy sensitivity. Low conviction encourages exploration by introducing controlled instability and stochasticity.
+
+Gradient Stabilization: During training, conviction acts as a weight in the loss landscape. High-conviction beliefs resist rapid reweighting or overwriting; they act as epistemic “anchors”.
+
+Latent Sampling Modulation: When generating alternate belief trajectories — such as in multi-branch world simulations — conviction-weighted fields help prioritize stable paths while still allowing exploratory offshoots.
+
+Through this integration, the SPN-VAE can adaptively route information based on the epistemic landscape of the system. Beliefs are not equally weighted or blindly sampled; they are contextually filtered and modulated by their field dynamics. This reflects the behavior of real cognitive systems, which lean more heavily on stable, coherent beliefs when navigating uncertainty, and defer to exploration when knowledge is sparse or ambiguous.
+
