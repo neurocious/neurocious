@@ -1,0 +1,31 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Neurocious.Core", "src\Neurocious.Core\Neurocious.Core.csproj", "{66341215-42F7-B114-0347-FA15B92AD014}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Neurocious.Core.Test", "src\Neurocious.Core.Test\Neurocious.Core.Test.csproj", "{10BFF8DA-0680-84B8-92A4-EA1717190A44}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{66341215-42F7-B114-0347-FA15B92AD014}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{66341215-42F7-B114-0347-FA15B92AD014}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{66341215-42F7-B114-0347-FA15B92AD014}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{66341215-42F7-B114-0347-FA15B92AD014}.Release|Any CPU.Build.0 = Release|Any CPU
+		{10BFF8DA-0680-84B8-92A4-EA1717190A44}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{10BFF8DA-0680-84B8-92A4-EA1717190A44}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{10BFF8DA-0680-84B8-92A4-EA1717190A44}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{10BFF8DA-0680-84B8-92A4-EA1717190A44}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {48D8187B-C99C-4E6B-BC1F-F99772679494}
+	EndGlobalSection
+EndGlobal
