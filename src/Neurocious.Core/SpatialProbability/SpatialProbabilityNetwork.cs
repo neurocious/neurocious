@@ -78,6 +78,11 @@ namespace Neurocious.Core.SpatialProbability
                 bufferSize: this.bufferSize);
         }
 
+        internal PradOp VectorField
+        {
+            get => vectorField;
+        }
+
         public PradResult CalculateFieldAlignment()
         {
             return vectorField.Then(field => {
@@ -121,9 +126,6 @@ namespace Neurocious.Core.SpatialProbability
         public (PradResult routing, PradResult confidence, PradResult policy, PradResult reflexes, PradResult predictions, FieldParameters fieldParams, BeliefExplanation explanation, BeliefReconstructionExplanation inverseExplanation)
         ProcessState(PradOp state)
         {
-            // Add state to temporal buffer for inverse flow
-            inverseFlowIntegration.AddToTemporalBuffer(state);
-
             // Add to temporal buffer
             if (temporalBuffer.Count >= bufferSize)
             {
@@ -131,8 +133,10 @@ namespace Neurocious.Core.SpatialProbability
             }
             temporalBuffer.Enqueue(state.CurrentTensor);
 
+            var sequence = temporalBuffer.Select(x => new PradOp(x)).ToList();
+
             // Get base routing with exploration
-            var (routing, confidence, fieldParams) = RouteStateInternal(state);
+            var (routing, confidence, fieldParams) = RouteStateInternal(sequence);
 
             // Get temporal context
             var historyTensor = GetHistoryTensor();
@@ -171,11 +175,12 @@ namespace Neurocious.Core.SpatialProbability
                 potentialAntecedents);
         }
 
-        private (PradResult routing, PradResult confidence, FieldParameters fieldParams) RouteStateInternal(PradOp state)
+        internal (PradResult routing, PradResult confidence, FieldParameters fieldParams) RouteStateInternal(List<PradOp> sequence)
         {
             // Project through VAE if available
-            var routingState = vaeModel != null ?
-                vaeModel.Encode(state) : state;
+            var routingState = vaeModel != null
+               ? ProcessVAESequence(sequence)  // New helper method
+               : sequence.Last();  // Use last state if no VAE
 
             // Calculate base routing
             var similarity = routingState.MatMul(vectorField.Transpose());
@@ -197,10 +202,29 @@ namespace Neurocious.Core.SpatialProbability
             return (routing, confidence, fieldParams);
         }
 
-        public void UpdateFields(PradResult route, PradResult reward, PradOp state)
+        private PradOp ProcessVAESequence(List<PradOp> sequence)
+        {
+            var (mean, logVar) = vaeModel.EncodeSequence(sequence);
+            return ReparameterizationTrick(mean, logVar);
+        }
+
+        private PradOp ReparameterizationTrick(PradResult mean, PradResult logVar)
+        {
+            var std = logVar.Then(v => v.Mul(new Tensor(v.Result.Shape, 0.5)))
+                           .Then(PradOp.ExpOp);
+
+            var epsilon = new Tensor(mean.Result.Shape,
+                Enumerable.Range(0, mean.Result.Data.Length)
+                    .Select(_ => Random.Shared.NextGaussian())
+                    .ToArray());
+
+            return mean.Add(std.Result.ElementwiseMultiply(epsilon));
+        }
+
+        public void UpdateFields(PradResult route, PradResult reward, List<PradOp> sequence)
         {
             // Get current field parameters
-            var (_, _, fieldParams) = RouteStateInternal(state);
+            var (_, _, fieldParams) = RouteStateInternal(sequence);
 
             // Calculate adaptive learning rate
             float adaptiveLearningRate = LEARNING_RATE *

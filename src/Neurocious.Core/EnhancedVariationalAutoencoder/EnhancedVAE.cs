@@ -101,7 +101,7 @@ namespace Neurocious.Core.EnhancedVariationalAutoencoder
             return (mean, logVar);
         }
 
-        protected virtual (PradResult reconstruction, FieldParameters fieldParams) DecodeWithField(PradOp latentVector)
+        internal virtual (PradResult reconstruction, FieldParameters fieldParams) DecodeWithField(PradOp latentVector)
         {
             var hidden1 = decoderFC1.MatMul(latentVector)
                 .Then(PradOp.LeakyReLUOp);
