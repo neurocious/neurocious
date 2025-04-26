@@ -131,7 +131,7 @@ namespace Neurocious.Core.Memory
 
             // Use attention system to retrieve relevant memories
             return await attentionSystem.QueryMemoryWithAttention(
-                memorySystem,
+                MemorySystem.MemoryStore,
                 attentionalQuery);
         }
 

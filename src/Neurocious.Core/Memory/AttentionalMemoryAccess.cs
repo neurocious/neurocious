@@ -1,9 +1,4 @@
 ﻿using Neurocious.Core.Common;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace Neurocious.Core.Memory
 {
@@ -28,11 +23,12 @@ namespace Neurocious.Core.Memory
         }
 
         public async Task<List<BeliefMemoryCell>> QueryMemoryWithAttention(
+            BeliefMemoryStore store,
             AttentionalQuery query,
             int maxResults = 5)
         {
             // Calculate attention weights for all memories
-            var weights = await CalculateAttentionWeights(query);
+            var weights = await CalculateAttentionWeights(store, query);
 
             // Get top K memories by attention weight
             var topMemories = weights
@@ -49,20 +45,21 @@ namespace Neurocious.Core.Memory
         }
 
         private async Task<Dictionary<string, float>> CalculateAttentionWeights(
-            AttentionalQuery query)
+    BeliefMemoryStore memoryStore,
+    AttentionalQuery query)
         {
             var weights = new Dictionary<string, float>();
-            var allMemories = memoryEngine.MemorySystem.GetAllMemories();
+            var allMemories = memoryStore.GetAllBeliefs();
 
             foreach (var memory in allMemories)
             {
                 float weight = 0;
 
                 // Field alignment weight
-                weight += memoryEngine.MemorySystem.CalculateFieldAlignment(query.CurrentField, memory.FieldParams) * 0.3f;
+                weight += CalculateFieldAlignment(query.CurrentField, memory.FieldParams) * 0.3f;
 
                 // Narrative overlap weight
-                weight += memoryEngine.NarrativeManager.CalculateNarrativeOverlap(query.ActiveNarratives, memory.NarrativeContexts) * 0.3f;
+                weight += CalculateNarrativeOverlap(query.ActiveNarratives, memory.NarrativeContexts) * 0.3f;
 
                 // Temporal recency weight
                 weight += CalculateTemporalRecency(query.QueryTime, memory.LastAccessed) * 0.2f;
@@ -77,6 +74,31 @@ namespace Neurocious.Core.Memory
             }
 
             return weights;
+        }
+
+        private float CalculateFieldAlignment(FieldParameters current, FieldParameters memory)
+        {
+            float curvatureDiff = Math.Abs((float)(current.Curvature - memory.Curvature));
+            float entropyDiff = Math.Abs((float)(current.Entropy - memory.Entropy));
+            float alignmentDiff = Math.Abs((float)(current.Alignment - memory.Alignment));
+
+            // Return similarity score (1 - normalized difference)
+            return 1 - (curvatureDiff + entropyDiff + alignmentDiff) / 3;
+        }
+
+        private float CalculateTemporalRecency(DateTime current, DateTime lastAccessed)
+        {
+            var timeDiff = current - lastAccessed;
+            // Exponential decay over 24 hours
+            return (float)Math.Exp(-timeDiff.TotalHours / 24);
+        }
+
+        private float CalculateNarrativeOverlap(HashSet<string> active, HashSet<string> memory)
+        {
+            if (!active.Any() || !memory.Any()) return 0;
+
+            int overlap = active.Intersect(memory).Count();
+            return (float)overlap / Math.Max(active.Count, memory.Count);
         }
 
         private void UpdateWorkingMemory(IEnumerable<string> activeBeliefIds)

@@ -26,6 +26,14 @@ namespace Neurocious.Core.Memory
             this.TemporalRegularizer = new TemporalRegularizer();
         }
 
+        public BeliefMemoryStore MemoryStore
+        {
+            get
+            {
+                return memoryStore;
+            }
+        }
+
         // Core Memory Operations
         public async Task<BeliefMemoryCell> FormBelief(PradOp input)
         {
@@ -90,7 +98,7 @@ namespace Neurocious.Core.Memory
         public BeliefMemoryCell Retrieve(string beliefId) =>
             memoryStore.Retrieve(beliefId);
 
-        public List<BeliefMemoryCell> GetAllMemories() =>
+        public List<BeliefMemoryCell> GetAllBeliefs() =>
             memoryStore.GetAllBeliefs();
 
         public List<BeliefMemoryCell> GetBeliefsByTimeRange(DateTime start, DateTime end) =>
