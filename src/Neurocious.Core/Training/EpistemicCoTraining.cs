@@ -25,97 +25,214 @@ namespace Neurocious.Core.Training
             this.optimizerSPN = new AdamOptimizer(config.LearningRate, 0.9, 0.999);
         }
 
-        public async Task TrainStep(
-            List<PradOp> inputSequence,
-            List<float> rewards,
-            CoTrainingConfig config)
+        public async Task Train(
+        List<List<PradOp>> trainingSequences,       // Sequences of input states
+        List<List<float>> rewardSequences,          // Corresponding rewards
+        List<List<PradOp>> expectedActionSequences, // Expected policy actions
+        List<List<PradOp>> observedReactionSequences, // Observed reflexes
+        List<List<PradOp>> futureStateSequences,    // Future states for prediction
+        int epochs,
+        CoTrainingConfig config)
         {
-            // Build full latent sequence by encoding each input separately
+            for (int epoch = 0; epoch < epochs; epoch++)
+            {
+                float epochLoss = 0;
+                int batchCount = 0;
+
+                // Process sequences in batches
+                for (int i = 0; i < trainingSequences.Count; i += config.BatchSize)
+                {
+                    var batchSize = Math.Min(config.BatchSize, trainingSequences.Count - i);
+                    var batchLoss = 0.0f;
+
+                    // Process each sequence in the batch
+                    for (int j = 0; j < batchSize; j++)
+                    {
+                        var sequenceIndex = i + j;
+                        await TrainStep(
+                            trainingSequences[sequenceIndex],
+                            rewardSequences[sequenceIndex],
+                            expectedActionSequences[sequenceIndex],
+                            observedReactionSequences[sequenceIndex],
+                            futureStateSequences[sequenceIndex],
+                            config
+                        );
+                        // Note: Need to capture and accumulate loss from TrainStep
+                    }
+
+                    epochLoss += batchLoss;
+                    batchCount++;
+
+                    if (batchCount % 10 == 0)
+                    {
+                        Console.WriteLine($"Epoch {epoch}, Batch {batchCount}, Average Loss: {batchLoss / batchSize:F4}");
+                    }
+                }
+
+                Console.WriteLine($"Epoch {epoch} completed. Average Loss: {epochLoss / batchCount:F4}");
+
+                // Optional: Validation step
+                if (epoch % 5 == 0)
+                {
+                    await ValidateModel(/* validation data */);
+                }
+            }
+        }
+
+        private async Task ValidateModel(/* validation parameters */)
+        {
+            // TODO: Implement validation
+            // - Check belief coherence
+            // - Evaluate prediction accuracy
+            // - Assess policy performance
+            // - Measure reflex responsiveness
+        }
+
+        public async Task TrainStep(
+    List<PradOp> inputSequence,
+    List<float> rewards,
+    List<PradOp> expectedActions,  // For policy supervision
+    List<PradOp> observedReactions,  // For reflex supervision
+    List<PradOp> futureStates,  // For prediction supervision
+    CoTrainingConfig config)
+        {
+            // Build full latent sequence
             var latentSequence = new List<PradOp>();
             var means = new List<PradResult>();
             var logVars = new List<PradResult>();
 
-            foreach (var input in inputSequence)
+            for (int i = 0; i < inputSequence.Count; i++)
             {
-                var (mean, logVar) = vae.Encode(input);  // Encode each input individually
+                var currentSubsequence = inputSequence.Take(i + 1).ToList();
+                var (mean, logVar) = vae.EncodeSequence(currentSubsequence);
                 var latent = Reparameterize(mean, logVar);
-                latentSequence.Add(latent);
+                latentSequence.Add(latent.PradOp);
                 means.Add(mean);
                 logVars.Add(logVar);
             }
 
-            // === SPN Forward Pass with full latent sequence ===
-            var (routing, confidence, fieldParams) = spn.RouteStateInternal(latentSequence);
+            var totalLoss = new PradOp(new Tensor(new[] { 1 }, new[] { 0.0 }));
 
-            // === VAE reconstruction from final latent state ===
-            var reconOutput = vae.DecodeWithField(latentSequence.Last());
-            var reconLoss = CalculateReconstructionLoss(inputSequence.Last(), reconOutput.reconstruction);
+            // Process each timestep
+            for (int t = 0; t < latentSequence.Count; t++)
+            {
+                // Full epistemic processing
+                var (routing, confidence, policy, reflexes, predictions,
+                     fieldParams, explanation, inverseExplanation) =
+                    spn.ProcessState(latentSequence[t]);
 
-            // Use field-aware KL with dynamic uncertainty scaling
-            var entropyScale = 1.0f + (float)fieldParams.Entropy * config.EntropyScaling;
-            var curvatureScale = 1.0f + (float)fieldParams.Curvature * config.CurvatureScaling;
-            var varianceScale = entropyScale * curvatureScale;
+                // === Core Losses ===
+                // Routing and reward
+                var routingLoss = CalculateRoutingLoss(routing, rewards[t]);
 
-            // KL loss on final state
-            var klLoss = fieldKL.CalculateKL(means.Last(), logVars.Last(), latentSequence.Last());
+                // Policy prediction
+                var policyLoss = CalculatePolicyLoss(policy, expectedActions[t]);
 
-            // Calculate SPN base losses
-            var spnRewardLoss = CalculateSPNRewardLoss(routing, rewards);
-            var spnEntropyLoss = CalculateSPNEntropyLoss(routing);
+                // Reflex behavior
+                var reflexLoss = CalculateReflexLoss(reflexes, observedReactions[t]);
 
-            // === Sequence-based losses using full latent trajectory ===
-            var narrativeContinuityLoss = CalculateNarrativeContinuityLoss(latentSequence);
-            var fieldAlignmentLoss = CalculateFieldAlignmentLoss(latentSequence, spn.VectorField);
+                // Future prediction
+                var predictionLoss = CalculatePredictionLoss(predictions, futureStates[t]);
 
-            // === Total Loss ===
-            var totalLoss = reconLoss
-                + config.Beta * klLoss
-                + config.Gamma * narrativeContinuityLoss
-                + config.Delta * fieldAlignmentLoss
-                + config.Eta * (spnRewardLoss + spnEntropyLoss);
+                // === VAE Losses ===
+                // Reconstruction
+                var reconOutput = vae.DecodeWithField(latentSequence[t]);
+                var reconLoss = CalculateReconstructionLoss(inputSequence[t], reconOutput.reconstruction);
 
-            // === Backward and Optimize ===
+                // Field-aware KL
+                var entropyScale = 1.0f + (float)fieldParams.Entropy * config.EntropyScaling;
+                var curvatureScale = 1.0f + (float)fieldParams.Curvature * config.CurvatureScaling;
+                var klLoss = fieldKL.CalculateKL(means[t], logVars[t], latentSequence[t]);
+
+                // === Sequential Losses ===
+                var narrativeContinuityLoss = t > 0
+                    ? CalculateNarrativeContinuityLoss(latentSequence.Take(t + 1).ToList()).PradOp
+                    : new PradOp(new Tensor(new[] { 1 }, new[] { 0.0 }));
+
+                var fieldAlignmentLoss = t > 0
+                    ? CalculateFieldAlignmentLoss(latentSequence.Take(t + 1).ToList(), spn.VectorField).PradOp
+                    : new PradOp(new Tensor(new[] { 1 }, new[] { 0.0 }));
+
+                // Combine losses
+                var stepLoss = routingLoss
+                    + config.PolicyWeight * policyLoss
+                    + config.ReflexWeight * reflexLoss
+                    + config.PredictionWeight * predictionLoss
+                    + config.Beta * klLoss
+                    + reconLoss
+                    + config.Gamma * narrativeContinuityLoss
+                    + config.Delta * fieldAlignmentLoss;
+
+                totalLoss = totalLoss.Add(stepLoss.Result);
+
+                // Optional: Log detailed metrics for this timestep
+                if (Random.Shared.NextDouble() < 0.01)
+                {
+                    LogStepMetrics(t, routing, policy, reflexes, predictions,
+                                  explanation, inverseExplanation, fieldParams);
+                }
+            }
+
+            // Backward pass and optimization
             totalLoss.Back();
             optimizerVAE.Optimize(vae.GetTrainableParameters());
             optimizerSPN.Optimize(spn.GetTrainableParameters());
-
-            // Optional: Log training metrics
-            if (Random.Shared.NextDouble() < 0.01) // Log occasionally
-            {
-                var sequenceMetrics = new List<FieldAwareKLDivergence.FieldKLMetrics>();
-
-                // Analyze KL contribution for each step in sequence
-                for (int i = 0; i < latentSequence.Count; i++)
-                {
-                    var stepMetrics = fieldKL.AnalyzeKLContribution(
-                        means[i],
-                        logVars[i],
-                        latentSequence[i]);
-                    sequenceMetrics.Add(stepMetrics);
-                }
-
-                LogTrainingMetrics(sequenceMetrics, fieldParams, varianceScale);
-            }
         }
 
-        private void LogTrainingMetrics(
-            List<FieldAwareKLDivergence.FieldKLMetrics> sequenceMetrics,
-            FieldParameters fieldParams,
-            float varianceScale)
+        private PradResult CalculateRoutingLoss(PradResult routing, float reward)
         {
-            Console.WriteLine($"Training Metrics (Sequence Average):");
-            Console.WriteLine($"Field KL: {sequenceMetrics.Average(m => m.DetailedMetrics["field_kl"]):F3}");
-            Console.WriteLine($"KL Reduction: {sequenceMetrics.Average(m => m.DetailedMetrics["kl_reduction"]):F3}");
-            Console.WriteLine($"Field Alignment: {sequenceMetrics.Average(m => m.FieldAlignmentScore):F3}");
-            Console.WriteLine($"Uncertainty Adaptation: {sequenceMetrics.Average(m => m.UncertaintyAdaptation):F3}");
-            Console.WriteLine($"Field Entropy: {fieldParams.Entropy:F3}");
-            Console.WriteLine($"Field Curvature: {fieldParams.Curvature:F3}");
-            Console.WriteLine($"Variance Scale: {varianceScale:F3}");
+            // Create a tensor from the reward
+            var rewardTensor = new Tensor(routing.Result.Shape, new[] { reward });
 
-            // Add sequence-specific metrics
-            Console.WriteLine($"Sequence Length: {sequenceMetrics.Count}");
-            Console.WriteLine($"KL Variance: {sequenceMetrics.Select(m => m.DetailedMetrics["field_kl"]).Variance():F3}");
-            Console.WriteLine($"Field Alignment Stability: {1 - sequenceMetrics.Select(m => m.FieldAlignmentScore).Variance():F3}");
+            // Weight routing probabilities by reward
+            // Negative sign because we want to maximize reward
+            return routing.Then(r => r.ElementwiseMultiply(rewardTensor))
+                         .Then(PradOp.MeanOp)
+                         .Mul(new Tensor(new[] { 1 }, new[] { -1.0 }));
+        }
+
+        private PradResult CalculatePolicyLoss(PradResult policy, PradOp expectedAction)
+        {
+            // Cross entropy between policy and expected action
+            return policy.Then(p => p.Sub(expectedAction.Result))
+                        .Then(PradOp.SquareOp)
+                        .Then(PradOp.MeanOp);
+        }
+
+        private PradResult CalculateReflexLoss(PradResult reflexes, PradOp observedReaction)
+        {
+            // Binary cross entropy for reflex triggers
+            return reflexes.Then(r => r.Sub(observedReaction.Result))
+                          .Then(PradOp.SquareOp)
+                          .Then(PradOp.MeanOp);
+        }
+
+        private PradResult CalculatePredictionLoss(PradResult predictions, PradOp futureState)
+        {
+            // MSE between predicted and actual future state
+            return predictions.Then(p => p.Sub(futureState.Result))
+                             .Then(PradOp.SquareOp)
+                             .Then(PradOp.MeanOp);
+        }
+
+        private void LogStepMetrics(
+            int timestep,
+            PradResult routing,
+            PradResult policy,
+            PradResult reflexes,
+            PradResult predictions,
+            BeliefExplanation explanation,
+            BeliefReconstructionExplanation inverseExplanation,
+            FieldParameters fieldParams)
+        {
+            Console.WriteLine($"Timestep {timestep} Metrics:");
+            Console.WriteLine($"Routing confidence: {routing.Result.Data.Max():F3}");
+            Console.WriteLine($"Policy certainty: {policy.Result.Data.Max():F3}");
+            Console.WriteLine($"Active reflexes: {reflexes.Result.Data.Count(x => x > 0.5)}");
+            Console.WriteLine($"Prediction confidence: {predictions.Result.Data.Average():F3}");
+            Console.WriteLine($"Field params - Entropy: {fieldParams.Entropy:F3}, Curvature: {fieldParams.Curvature:F3}");
+            Console.WriteLine($"Explanation quality: {explanation.Confidence:F3}");
+            Console.WriteLine($"Inverse reconstruction smoothness: {inverseExplanation.TemporalSmoothness:F3}");
         }
 
         private PradResult Reparameterize(PradResult mean, PradResult logVar)
@@ -201,11 +318,10 @@ namespace Neurocious.Core.Training
         }
 
         private PradResult CalculateReconstructionLoss(
-            List<PradOp> input,
+            PradOp input,
             PradResult output)
         {
-            // MSE loss for simplicity
-            var diff = output.Sub(input.Last().Result);
+            var diff = output.Sub(input.Result);
             return diff.Then(PradOp.SquareOp)
                       .Then(PradOp.MeanOp);
         }
