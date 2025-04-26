@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using static ManagedCuda.BasicTypes.CUarrayMapInfo;
 using static Neurocious.Core.Memory.EpistemicMemoryEngine;
 
 namespace Neurocious.Core.Memory
@@ -25,19 +26,36 @@ namespace Neurocious.Core.Memory
             this.beliefToThreadMap = new Dictionary<string, HashSet<string>>();
         }
 
-        public class NarrativeThread
+        public async Task ConnectBeliefs(List<string> sharedContexts, BeliefMemoryCell source, BeliefMemoryCell? target)
         {
-            public string ThreadId { get; init; }
-            public List<string> BeliefSequence { get; set; }
-            public float Coherence { get; set; }
-            public DateTime StartTime { get; init; }
-            public DateTime LastUpdate { get; set; }
-            public Dictionary<string, float> ThematicWeights { get; set; }
-            public HashSet<string> RelatedThreads { get; set; }
-            public Dictionary<string, float> ThreadMetrics { get; set; }
+            if (sharedContexts.Any())
+            {
+                // Reinforce existing narrative connection
+                foreach (var threadId in GetSharedThreads(source.BeliefId, target.BeliefId))
+                {
+                    if (threads.TryGetValue(threadId, out var thread))
+                    {
+                        thread.Coherence *= 1.1f;  // Strengthen connection
+                        thread.LastUpdate = DateTime.UtcNow;
+                        await UpdateThematicWeights(thread);
+                    }
+                }
+            }
+            else
+            {
+                // Create new thread connecting these beliefs
+                await CreateNewThread(source, target);
+            }
         }
 
-        public async Task ProcessNewBelief(EpistemicMemorySystem.BeliefMemoryCell belief)
+        private HashSet<string> GetSharedThreads(string beliefId1, string beliefId2)
+        {
+            var threads1 = beliefToThreadMap.GetValueOrDefault(beliefId1, new HashSet<string>());
+            var threads2 = beliefToThreadMap.GetValueOrDefault(beliefId2, new HashSet<string>());
+            return threads1.Intersect(threads2).ToHashSet();
+        }
+
+        public async Task ProcessNewBelief(BeliefMemoryCell belief)
         {
             // Find compatible threads for the new belief
             var compatibleThreads = await FindCompatibleThreads(belief);
@@ -147,7 +165,7 @@ namespace Neurocious.Core.Memory
             return compatibility > threadCoherenceThreshold;
         }
 
-        private async Task CreateNewThread(EpistemicMemorySystem.BeliefMemoryCell belief)
+        private async Task CreateNewThread(BeliefMemoryCell belief)
         {
             var thread = new NarrativeThread
             {
@@ -172,7 +190,7 @@ namespace Neurocious.Core.Memory
 
         private async Task ExtendThread(
             NarrativeThread thread,
-            EpistemicMemorySystem.BeliefMemoryCell belief)
+            BeliefMemoryCell belief)
         {
             // Check if thread needs branching
             if (ShouldBranchThread(thread, belief))
@@ -182,13 +200,13 @@ namespace Neurocious.Core.Memory
             }
 
             // Extend existing thread
-            thread.BeliefSequence.Add(belief.BeliefId);
+            thread.Sequence.Add(belief);
             thread.LastUpdate = DateTime.UtcNow;
 
             // Trim if exceeds max length
-            if (thread.BeliefSequence.Count > maxThreadLength)
+            if (thread.Sequence.Count > maxThreadLength)
             {
-                thread.BeliefSequence.RemoveAt(0);
+                thread.Sequence.RemoveAt(0);
             }
 
             // Update thread properties
@@ -199,11 +217,11 @@ namespace Neurocious.Core.Memory
 
         private bool ShouldBranchThread(
             NarrativeThread thread,
-            EpistemicMemorySystem.BeliefMemoryCell belief)
+            BeliefMemoryCell belief)
         {
-            if (!thread.BeliefSequence.Any()) return false;
+            if (!thread.Sequence.Any()) return false;
 
-            var lastBelief = engine.memorySystem.Retrieve(thread.BeliefSequence.Last());
+            var lastBelief = engine.MemorySystem.Retrieve(thread.Sequence.Last().BeliefId);
             if (lastBelief == null) return false;
 
             // Check for significant narrative divergence
@@ -292,7 +310,7 @@ namespace Neurocious.Core.Memory
         }
 
         private Dictionary<string, float> CalculateInitialThematicWeights(
-            EpistemicMemorySystem.BeliefMemoryCell belief)
+            BeliefMemoryCell belief)
         {
             return belief.NarrativeContexts.ToDictionary(
                 context => context,
@@ -394,7 +412,7 @@ namespace Neurocious.Core.Memory
             return (float)(overlap / totalSpan);
         }
 
-        private float CalculateNarrativeOverlap(
+        internal float CalculateNarrativeOverlap(
             HashSet<string> contexts1,
             HashSet<string> contexts2)
         {

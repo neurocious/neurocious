@@ -12,6 +12,12 @@ namespace Neurocious.Core.Memory
         private readonly Dictionary<string, float> attentionWeights;
         private readonly Queue<string> workingMemory;
         private readonly int workingMemoryCapacity;
+        private readonly EpistemicMemoryEngine memoryEngine;
+
+        public AttentionalMemoryAccess(EpistemicMemoryEngine memoryEngine)
+        {
+            this.memoryEngine = memoryEngine;
+        }
 
         public class AttentionalQuery
         {
@@ -32,7 +38,7 @@ namespace Neurocious.Core.Memory
             var topMemories = weights
                 .OrderByDescending(kv => kv.Value)
                 .Take(maxResults)
-                .Select(kv => memoryEngine.RetrieveMemory(kv.Key))
+                .Select(kv => memoryEngine.MemorySystem.Retrieve(kv.Key))
                 .Where(m => m != null)
                 .ToList();
 
@@ -46,17 +52,17 @@ namespace Neurocious.Core.Memory
             AttentionalQuery query)
         {
             var weights = new Dictionary<string, float>();
-            var allMemories = await memoryEngine.GetAllMemories();
+            var allMemories = memoryEngine.MemorySystem.GetAllMemories();
 
             foreach (var memory in allMemories)
             {
                 float weight = 0;
 
                 // Field alignment weight
-                weight += CalculateFieldAlignment(query.CurrentField, memory.FieldParams) * 0.3f;
+                weight += memoryEngine.MemorySystem.CalculateFieldAlignment(query.CurrentField, memory.FieldParams) * 0.3f;
 
                 // Narrative overlap weight
-                weight += CalculateNarrativeOverlap(query.ActiveNarratives, memory.NarrativeContexts) * 0.3f;
+                weight += memoryEngine.NarrativeManager.CalculateNarrativeOverlap(query.ActiveNarratives, memory.NarrativeContexts) * 0.3f;
 
                 // Temporal recency weight
                 weight += CalculateTemporalRecency(query.QueryTime, memory.LastAccessed) * 0.2f;

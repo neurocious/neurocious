@@ -83,6 +83,15 @@ namespace Neurocious.Core.SpatialProbability
                 bufferSize: this.bufferSize);
         }
 
+        public PradResult CalculateFieldAlignment()
+        {
+            return vectorField.Then(field => {
+                var meanVector = field.Then(PradOp.MeanOp);
+                return field.MatMul(meanVector.Result)
+                    .Then(PradOp.MeanOp);
+            });
+        }
+
         private void InitializeFields()
         {
             // Initialize vector field with normalized random values

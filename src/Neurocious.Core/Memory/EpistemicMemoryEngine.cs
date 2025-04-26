@@ -1,13 +1,6 @@
 ﻿using Neurocious.Core.Common;
 using Neurocious.Core.EnhancedVariationalAutoencoder;
-using Spatial=Neurocious.Core.SpatialProbability;
 using ParallelReverseAutoDiff.PRAD;
-using System;
-using System.Collections.Concurrent;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 using Neurocious.Core.SpatialProbability;
 
 namespace Neurocious.Core.Memory
@@ -37,7 +30,7 @@ namespace Neurocious.Core.Memory
             this.memorySystem = new EpistemicMemorySystem(vae, spn, inverseFlow);
 
             // Initialize higher-level components that work with the memory system
-            this.attentionSystem = new AttentionalMemoryAccess();
+            this.attentionSystem = new AttentionalMemoryAccess(this);
             this.narrativeManager = new NarrativeManager(this);
             this.metaBeliefSystem = new MetaBeliefSystem(this);
 
@@ -49,6 +42,16 @@ namespace Neurocious.Core.Memory
         internal EpistemicMemorySystem MemorySystem
         {
             get => memorySystem;
+        }
+
+        internal SpatialProbabilityNetwork SPN
+        {
+            get => spn;
+        }
+
+        internal NarrativeManager NarrativeManager
+        {
+            get => narrativeManager;
         }
 
         public class MemoryConditionedGeneration
@@ -227,12 +230,11 @@ namespace Neurocious.Core.Memory
         }
 
         private async Task GenerateMemoryAssociations(
-            BeliefMemoryCell source,
-            List<BeliefMemoryCell> context)
+    BeliefMemoryCell source,
+    List<BeliefMemoryCell> context)
         {
-            // Use SPN to find potential connections
             var sourceState = new PradOp(new Tensor(source.LatentVector));
-            var (routing, _, _, _) = spn.ProcessState(sourceState);
+            var (routing, confidence, policy, reflexes, predictions, fieldParams, explanation, inverse) = spn.ProcessState(sourceState);
 
             foreach (var target in context)
             {
@@ -244,20 +246,11 @@ namespace Neurocious.Core.Memory
 
                 if (similarity > 0.7f)
                 {
-                    // Create narrative bridge through core system
                     var sharedContexts = source.NarrativeContexts
                         .Intersect(target.NarrativeContexts)
                         .ToList();
 
-                    if (sharedContexts.Any())
-                    {
-                        await memorySystem.ReinforceNarrativeConnection(
-                            source, target, sharedContexts);
-                    }
-                    else
-                    {
-                        await memorySystem.CreateNarrativeLink(source, target);
-                    }
+                    narrativeManager.ConnectBeliefs(sharedContexts, source, target);
                 }
             }
         }

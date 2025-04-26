@@ -90,7 +90,7 @@ namespace Neurocious.Core.Memory
         public BeliefMemoryCell Retrieve(string beliefId) =>
             memoryStore.Retrieve(beliefId);
 
-        public List<BeliefMemoryCell> GetAllBeliefs() =>
+        public List<BeliefMemoryCell> GetAllMemories() =>
             memoryStore.GetAllBeliefs();
 
         public List<BeliefMemoryCell> GetBeliefsByTimeRange(DateTime start, DateTime end) =>
