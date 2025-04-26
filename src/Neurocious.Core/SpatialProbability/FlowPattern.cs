@@ -1,4 +1,4 @@
-﻿namespace Neurocious.Core.SpatialProbabilityNetwork;
+﻿namespace Neurocious.Core.SpatialProbability;
 
 public class FlowPattern
 {

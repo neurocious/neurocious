@@ -5,7 +5,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace Neurocious.Core.SpatialProbabilityNetwork
+namespace Neurocious.Core.SpatialProbability
 {
     public class BeliefExplanation
     {

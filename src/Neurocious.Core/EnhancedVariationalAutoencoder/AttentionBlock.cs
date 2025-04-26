@@ -1,4 +1,4 @@
-﻿using Neurocious.Core.SpatialProbabilityNetwork;
+﻿using Neurocious.Core.SpatialProbability;
 using ParallelReverseAutoDiff.PRAD;
 using System;
 using System.Collections.Generic;

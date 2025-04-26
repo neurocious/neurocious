@@ -1,4 +1,5 @@
 ﻿using Neurocious.Core.Common;
+using Neurocious.Core.EnhancedVariationalAutoencoder;
 using ParallelReverseAutoDiff.PRAD;
 using System;
 using System.Collections.Generic;
@@ -6,7 +7,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace Neurocious.Core.SpatialProbabilityNetwork
+namespace Neurocious.Core.SpatialProbability
 {
     public class SpatialProbabilityNetwork
     {
@@ -41,6 +42,8 @@ namespace Neurocious.Core.SpatialProbabilityNetwork
         private const float NOVELTY_WEIGHT = 0.1f;
         private const float BRANCH_DECAY_RATE = 0.95f;
 
+        private readonly InverseFlowIntegration inverseFlowIntegration;
+
         public SpatialProbabilityNetwork(
             EnhancedVAE vae = null,
             int stateDim = 20,
@@ -72,6 +75,12 @@ namespace Neurocious.Core.SpatialProbabilityNetwork
 
             // Track trainable parameters
             RegisterTrainableParameters();
+
+            // Initialize inverse flow integration
+            inverseFlowIntegration = new InverseFlowIntegration(
+                fieldShape: this.fieldShape,
+                vectorDim: this.vectorDim,
+                bufferSize: this.bufferSize);
         }
 
         private void InitializeFields()
@@ -105,9 +114,12 @@ namespace Neurocious.Core.SpatialProbabilityNetwork
         }
 
         // Core field operations
-        public (PradResult routing, PradResult confidence, PradResult policy, PradResult reflexes, PradResult predictions, FieldParameters fieldParams, BeliefExplanation explanation)
+        public (PradResult routing, PradResult confidence, PradResult policy, PradResult reflexes, PradResult predictions, FieldParameters fieldParams, BeliefExplanation explanation, BeliefReconstructionExplanation inverseExplanation)
         ProcessState(PradOp state)
         {
+            // Add state to temporal buffer for inverse flow
+            inverseFlowIntegration.AddToTemporalBuffer(state);
+
             // Add to temporal buffer
             if (temporalBuffer.Count >= bufferSize)
             {
@@ -134,7 +146,25 @@ namespace Neurocious.Core.SpatialProbabilityNetwork
             var latent = vaeModel != null ? vaeModel.Encode(state) : state;
             var explanation = GenerateBeliefExplanation(latent, routing, fieldParams, confidence);
 
-            return (routing, confidence, policy, reflexes, predictions, fieldParams, explanation);
+            var inverseContext = new PradOp(GetHistoryTensor());
+            var inverseExplanation = inverseFlowIntegration.ReconstructPriorBelief(
+                state,
+                inverseContext,
+                explanation?.TopContributingFeatures);
+
+            return (routing, confidence, policy, reflexes, predictions,
+                    fieldParams, explanation, inverseExplanation);
+        }
+
+        public BeliefReconstructionExplanation ReconstructPriorBelief(
+    PradOp currentState,
+    List<string> potentialAntecedents = null)
+        {
+            var context = new PradOp(GetHistoryTensor());
+            return inverseFlowIntegration.ReconstructPriorBelief(
+                currentState,
+                context,
+                potentialAntecedents);
         }
 
         private (PradResult routing, PradResult confidence, FieldParameters fieldParams) RouteStateInternal(PradOp state)
@@ -158,7 +188,7 @@ namespace Neurocious.Core.SpatialProbabilityNetwork
             var routing = AddExplorationNoise(baseRouting, exploration.ExplorationRate);
 
             // Calculate confidence
-            var confidence = CalculateRoutingConfidence(fieldParams, exploration);
+            var confidence = CalculateRoutingConfidence(fieldParams);
 
             return (routing, confidence, fieldParams);
         }
@@ -195,6 +225,9 @@ namespace Neurocious.Core.SpatialProbabilityNetwork
 
             // Update neural components with TD learning
             UpdateWithReward(reward.Result.Data[0]);
+
+            // Update inverse flow field
+            inverseFlowIntegration.UpdateFromForwardDynamics(vectorField, route);
         }
 
         // World branching support

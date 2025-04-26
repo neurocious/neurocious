@@ -1,11 +1,6 @@
 ﻿using Neurocious.Core.Common;
-using Neurocious.Core.SpatialProbabilityNetwork;
+using Neurocious.Core.SpatialProbability;
 using ParallelReverseAutoDiff.PRAD;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace Neurocious.Core.EnhancedVariationalAutoencoder
 {
@@ -250,6 +245,85 @@ namespace Neurocious.Core.EnhancedVariationalAutoencoder
                 .Add(klLoss.Result.ElementwiseMultiply(new Tensor(klLoss.Result.Shape, klWeight)))
                 .Add(fieldRegLoss.Result.Mul(new Tensor(fieldRegLoss.Result.Shape, 0.1)))
                 .Add(contrastiveLoss.Result.Mul(new Tensor(contrastiveLoss.Result.Shape, 0.05)));
+        }
+
+        protected PradResult ReparameterizationTrick(PradResult mean, PradResult logVar)
+        {
+            // Scale and shift the standard deviation
+            var std = logVar.Then(v => v.Mul(new Tensor(v.Result.Shape, 0.5)))
+                           .Then(PradOp.ExpOp);
+
+            // Generate random normal samples
+            var epsilon = new Tensor(mean.Result.Shape,
+                Enumerable.Range(0, mean.Result.Data.Length)
+                    .Select(_ => random.NextGaussian())
+                    .ToArray());
+
+            // Combine mean and scaled noise
+            return mean.Add(std.Result.ElementwiseMultiply(epsilon));
+        }
+
+        public FieldParameters ExtractFieldParameters(PradOp state)
+        {
+            // Get latent field representation
+            var latentState = state.MatMul(decoderFieldOutput.CurrentTensor);
+
+            // Extract individual field parameters with appropriate activation functions
+            var curvature = new PradOp(latentState.Result.Indexer("0"))
+                .Then(PradOp.ReluOp);  // Non-negative curvature
+
+            var entropy = new PradOp(latentState.Result.Indexer("1"))
+                .Then(PradOp.SigmoidOp);  // Bounded [0,1]
+
+            var alignment = new PradOp(latentState.Result.Indexer("2"))
+                .Then(PradOp.TanhOp);  // Directional [-1,1]
+
+            return new FieldParameters(new Tensor(
+                new[] { 3 },
+                new[] {
+            curvature.Result.Data[0],
+            entropy.Result.Data[0],
+            alignment.Result.Data[0]
+                }));
+        }
+
+        protected PradResult ComputeKLDivergenceLoss(PradResult mean, PradResult logVar)
+        {
+            // KL divergence loss between approximate posterior and standard normal prior
+            // KL = -0.5 * sum(1 + log(σ²) - μ² - σ²)
+            var kl = logVar.Then(lv => {
+                var variance = lv.Then(PradOp.ExpOp);
+                var meanSquared = mean.Then(m => m.ElementwiseMultiply(m.Result));
+
+                return new PradOp(new Tensor(lv.Result.Shape, 1.0))
+                    .Add(lv.Result)
+                    .Sub(meanSquared.Result)
+                    .Sub(variance.Result)
+                    .Then(sum => sum.Mul(new Tensor(sum.Result.Shape, -0.5)));
+            });
+
+            return kl.Then(PradOp.MeanOp);
+        }
+
+        protected PradResult ComputeBCELoss(Tensor predicted, Tensor target)
+        {
+            // Binary Cross Entropy Loss
+            // BCE = -Σ(y * log(p) + (1-y) * log(1-p))
+            var epsilon = 1e-7;  // Prevent log(0)
+
+            // Clip predictions to prevent numerical instability
+            var clippedPred = predicted.Data.Select(p => Math.Max(Math.Min(p, 1 - epsilon), epsilon));
+
+            var bce = new double[predicted.Data.Length];
+            for (int i = 0; i < predicted.Data.Length; i++)
+            {
+                double y = target.Data[i];
+                double p = clippedPred.ElementAt(i);
+                bce[i] = -(y * Math.Log(p) + (1 - y) * Math.Log(1 - p));
+            }
+
+            return new PradOp(new Tensor(predicted.Shape, bce))
+                .Then(PradOp.MeanOp);
         }
 
         private PradResult ComputeBatchReconstructionLoss(List<Tensor> inputs, PradResult reconstruction)
