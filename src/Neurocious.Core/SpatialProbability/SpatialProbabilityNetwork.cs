@@ -1,11 +1,6 @@
 ﻿using Neurocious.Core.Common;
 using Neurocious.Core.EnhancedVariationalAutoencoder;
 using ParallelReverseAutoDiff.PRAD;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace Neurocious.Core.SpatialProbability
 {
@@ -40,7 +35,7 @@ namespace Neurocious.Core.SpatialProbability
         private const float FIELD_DECAY = 0.999f;
         private const float MIN_FIELD_STRENGTH = 1e-6f;
         private const float NOVELTY_WEIGHT = 0.1f;
-        private const float BRANCH_DECAY_RATE = 0.95f;
+        internal const float BRANCH_DECAY_RATE = 0.95f;
 
         private readonly InverseFlowIntegration inverseFlowIntegration;
 
@@ -812,6 +807,45 @@ namespace Neurocious.Core.SpatialProbability
                 }
             }
             return $"Region_{topRegion}";
+        }
+
+        private float CosineSimilarity(float[] v1, float[] v2)
+        {
+            float dot = v1.Zip(v2, (a, b) => a * b).Sum();
+            float norm1 = (float)Math.Sqrt(v1.Sum(x => x * x));
+            float norm2 = (float)Math.Sqrt(v2.Sum(x => x * x));
+            return dot / (norm1 * norm2);
+        }
+
+        private float CalculateFlowStability(List<GeometricField> history)
+        {
+            // Analyze flow consistency over time
+            float directionStability = 0;
+            float strengthStability = 0;
+            float geometricStability = 0;
+
+            for (int i = 1; i < history.Count; i++)
+            {
+                // Direction consistency
+                directionStability += CosineSimilarity(
+                    history[i].Direction,
+                    history[i - 1].Direction);
+
+                // Strength consistency
+                strengthStability += 1 - Math.Abs(
+                    history[i].Strength - history[i - 1].Strength);
+
+                // Geometric consistency (curvature, divergence, rotation)
+                geometricStability += 1 - (
+                    Math.Abs(history[i].LocalCurvature - history[i - 1].LocalCurvature) +
+                    Math.Abs(history[i].LocalDivergence - history[i - 1].LocalDivergence) +
+                    Math.Abs(history[i].LocalRotation - history[i - 1].LocalRotation)
+                ) / 3;
+            }
+
+            // Combine stability measures
+            return (directionStability + strengthStability + geometricStability) /
+                   (3 * (history.Count - 1));
         }
 
         private float CalculateRoutingShift(Tensor original, Tensor perturbed)

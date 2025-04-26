@@ -1,9 +1,4 @@
 ﻿using Neurocious.Core.Common;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace Neurocious.Core.SpatialProbability
 {
@@ -25,7 +20,7 @@ namespace Neurocious.Core.SpatialProbability
         public void UpdateValue(float newValue)
         {
             Value = newValue;
-            Probability *= BRANCH_DECAY_RATE;
+            Probability *= SpatialProbabilityNetwork.BRANCH_DECAY_RATE;
         }
     }
 }
