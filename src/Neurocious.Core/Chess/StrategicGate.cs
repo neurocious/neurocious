@@ -36,7 +36,7 @@ namespace Neurocious.Core.Chess
             return vector;
         }
 
-        public float CalculateActivation(PradOp state)
+        public virtual float CalculateActivation(PradOp state)
         {
             var stateVector = state.Result.Data.Select(x => (float)x).ToArray();
             NormalizeVector(stateVector);
