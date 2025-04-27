@@ -35,6 +35,11 @@ namespace Neurocious.Core.EnhancedVariationalAutoencoder
             InitializeNetworks();
         }
 
+        internal int LatentDimension
+        {
+            get => LATENT_DIM;
+        }
+
         protected virtual void InitializeNetworks()
         {
             // Initialize sequential encoder

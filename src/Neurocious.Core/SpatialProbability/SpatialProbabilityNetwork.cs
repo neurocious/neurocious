@@ -81,6 +81,13 @@ namespace Neurocious.Core.SpatialProbability
         internal PradOp VectorField
         {
             get => vectorField;
+            set => vectorField = value;
+        }
+
+        internal PradOp EntropyField
+        {
+            get => entropyField;
+            set => entropyField = value;
         }
 
         public PradResult CalculateFieldAlignment()
@@ -173,6 +180,124 @@ namespace Neurocious.Core.SpatialProbability
                 currentState,
                 context,
                 potentialAntecedents);
+        }
+
+        public void UpdateFieldParameters(FieldParameters fieldParams)
+        {
+            // Scale base field magnitudes by the field parameters
+            double curvatureScaling = 1.0 + fieldParams.Curvature;
+            double entropyScaling = fieldParams.Entropy;
+            double alignmentScaling = Math.Abs(fieldParams.Alignment);
+
+            // Update curvature field
+            var newCurvatureField = curvatureField.Then(field => {
+                var scaledField = field.ElementwiseMultiply(
+                    new Tensor(field.Result.Shape, curvatureScaling)
+                );
+                return scaledField;
+            });
+            curvatureField = new PradOp(newCurvatureField.Result);
+
+            // Update entropy field with regularization
+            var newEntropyField = entropyField.Then(field => {
+                // Blend current entropy with target entropy
+                var currentValues = field.Result.Data;
+                var targetValues = new double[currentValues.Length];
+                for (int i = 0; i < targetValues.Length; i++)
+                {
+                    targetValues[i] = entropyScaling;
+                }
+                var targetTensor = new Tensor(field.Result.Shape, targetValues);
+
+                // Smooth transition (0.8 current + 0.2 target)
+                return field.Mul(new Tensor(field.Result.Shape, 0.8))
+                    .Add(targetTensor.ElementwiseMultiply(new Tensor(targetTensor.Shape, 0.2)));
+            });
+            entropyField = new PradOp(newEntropyField.Result);
+
+            // Update alignment field based on desired alignment
+            var newAlignmentField = alignmentField.Then(field => {
+                var direction = fieldParams.Alignment > 0 ? 1.0 : -1.0;
+                var magnitude = alignmentScaling;
+
+                return field.Mul(new Tensor(field.Result.Shape, direction * magnitude));
+            });
+            alignmentField = new PradOp(newAlignmentField.Result);
+
+            // Update vector field to respect new field parameters
+            var newVectorField = vectorField.Then(field => {
+                // Scale magnitude by curvature
+                var scaledField = field.ElementwiseMultiply(
+                    new Tensor(field.Result.Shape, 1.0 / (1.0 + curvatureScaling))
+                );
+
+                // Apply alignment influence
+                if (Math.Abs(fieldParams.Alignment) > 0.1)
+                {
+                    var alignmentDirection = alignmentField.Result;
+                    scaledField = scaledField.Add(
+                        alignmentDirection.ElementwiseMultiply(
+                            new Tensor(alignmentDirection.Shape, alignmentScaling * 0.3)
+                        )
+                    );
+                }
+
+                return scaledField;
+            });
+
+            // Normalize the vector field
+            vectorField = new PradOp(NormalizeVectorField(newVectorField.Result));
+
+            // Update the field coupling strengths based on parameters
+            UpdateFieldCouplingStrengths(fieldParams);
+        }
+
+        private void UpdateFieldCouplingStrengths(FieldParameters fieldParams)
+        {
+            // Calculate coupling strengths between fields
+            double curvatureToEntropyStrength = 0.3 * (1.0 - Math.Abs(fieldParams.Alignment));
+            double entropyToAlignmentStrength = 0.2 * fieldParams.Curvature;
+            double alignmentToVectorStrength = 0.4 * (1.0 - fieldParams.Entropy);
+
+            // Update curvature-entropy coupling
+            if (curvatureToEntropyStrength > 0.1)
+            {
+                var entropyCoupling = curvatureField.Then(field => {
+                    return field.ElementwiseMultiply(
+                        new Tensor(field.Result.Shape, curvatureToEntropyStrength)
+                    );
+                });
+                entropyField = new PradOp(
+                    entropyField.Add(entropyCoupling.Result).Then(PradOp.SoftmaxOp).Result
+                );
+            }
+
+            // Update entropy-alignment coupling
+            if (entropyToAlignmentStrength > 0.1)
+            {
+                var alignmentCoupling = entropyField.Then(field => {
+                    return field.ElementwiseMultiply(
+                        new Tensor(field.Result.Shape, entropyToAlignmentStrength)
+                    );
+                });
+                alignmentField = new PradOp(
+                    alignmentField.Add(alignmentCoupling.Result)
+                        .Then(x => x.Mul(new Tensor(x.Result.Shape, 0.5))).Result
+                );
+            }
+
+            // Update alignment-vector coupling
+            if (alignmentToVectorStrength > 0.1)
+            {
+                var vectorCoupling = alignmentField.Then(field => {
+                    return field.ElementwiseMultiply(
+                        new Tensor(field.Result.Shape, alignmentToVectorStrength)
+                    );
+                });
+                vectorField = new PradOp(NormalizeVectorField(
+                    vectorField.Add(vectorCoupling.Result).Result
+                ));
+            }
         }
 
         internal (PradResult routing, PradResult confidence, FieldParameters fieldParams) RouteStateInternal(List<PradOp> sequence)
@@ -475,7 +600,7 @@ namespace Neurocious.Core.SpatialProbability
         }
 
         // Core field operations
-        private Tensor NormalizeVectorField(Tensor field)
+        internal Tensor NormalizeVectorField(Tensor field)
         {
             var shape = field.Shape;
             var result = new double[field.Data.Length];
