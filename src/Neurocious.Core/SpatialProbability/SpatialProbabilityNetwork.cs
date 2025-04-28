@@ -4,7 +4,7 @@ using ParallelReverseAutoDiff.PRAD;
 
 namespace Neurocious.Core.SpatialProbability
 {
-    public class SpatialProbabilityNetwork
+    public class SpatialProbabilityNetwork : ISpatialProbabilityNetwork
     {
         private readonly int stateDim;
         private readonly int[] fieldShape;
@@ -78,13 +78,13 @@ namespace Neurocious.Core.SpatialProbability
                 bufferSize: this.bufferSize);
         }
 
-        internal PradOp VectorField
+        public PradOp VectorField
         {
             get => vectorField;
             set => vectorField = value;
         }
 
-        internal PradOp EntropyField
+        public PradOp EntropyField
         {
             get => entropyField;
             set => entropyField = value;

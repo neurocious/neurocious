@@ -4,7 +4,7 @@ using ParallelReverseAutoDiff.PRAD;
 
 namespace Neurocious.Core.EnhancedVariationalAutoencoder
 {
-    public class EnhancedVAE
+    public class EnhancedVAE : IEnhancedVAE
     {
         protected const int INPUT_DIM = 784;
         protected const int HIDDEN_DIM = 256;
@@ -35,7 +35,7 @@ namespace Neurocious.Core.EnhancedVariationalAutoencoder
             InitializeNetworks();
         }
 
-        internal int LatentDimension
+        public int LatentDimension
         {
             get => LATENT_DIM;
         }
@@ -106,7 +106,7 @@ namespace Neurocious.Core.EnhancedVariationalAutoencoder
             return (mean, logVar);
         }
 
-        internal virtual (PradResult reconstruction, FieldParameters fieldParams) DecodeWithField(PradOp latentVector)
+        public virtual (PradResult reconstruction, FieldParameters fieldParams) DecodeWithField(PradOp latentVector)
         {
             var hidden1 = decoderFC1.MatMul(latentVector)
                 .Then(PradOp.LeakyReLUOp);
