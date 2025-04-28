@@ -1,6 +1,7 @@
 ﻿using Neurocious.Core.Common;
 using Neurocious.Core.EnhancedVariationalAutoencoder;
 using ParallelReverseAutoDiff.PRAD;
+using ParallelReverseAutoDiff.PRAD.Extensions;
 
 namespace Neurocious.Core.SpatialProbability
 {
@@ -90,15 +91,6 @@ namespace Neurocious.Core.SpatialProbability
             set => entropyField = value;
         }
 
-        public PradResult CalculateFieldAlignment()
-        {
-            return vectorField.Then(field => {
-                var meanVector = field.Then(PradOp.MeanOp);
-                return field.MatMul(meanVector.Result)
-                    .Then(PradOp.MeanOp);
-            });
-        }
-
         private void InitializeFields()
         {
             // Initialize vector field with normalized random values
@@ -143,7 +135,7 @@ namespace Neurocious.Core.SpatialProbability
             var sequence = temporalBuffer.Select(x => new PradOp(x)).ToList();
 
             // Get base routing with exploration
-            var (routing, confidence, fieldParams) = RouteStateInternal(sequence);
+            var (routing, confidence, fieldParams, processedSequence) = RouteStateInternal(sequence);
 
             // Get temporal context
             var historyTensor = GetHistoryTensor();
@@ -158,7 +150,7 @@ namespace Neurocious.Core.SpatialProbability
             var predictions = predictionNetwork.Forward(new PradOp(historyTensor));
 
             // Generate belief explanation
-            var latent = vaeModel != null ? vaeModel.Encode(state) : state;
+            var latent = processedSequence;
             var explanation = GenerateBeliefExplanation(latent, routing, fieldParams, confidence);
 
             var inverseContext = new PradOp(GetHistoryTensor());
@@ -191,7 +183,7 @@ namespace Neurocious.Core.SpatialProbability
 
             // Update curvature field
             var newCurvatureField = curvatureField.Then(field => {
-                var scaledField = field.ElementwiseMultiply(
+                var scaledField = field.Mul(
                     new Tensor(field.Result.Shape, curvatureScaling)
                 );
                 return scaledField;
@@ -211,7 +203,7 @@ namespace Neurocious.Core.SpatialProbability
 
                 // Smooth transition (0.8 current + 0.2 target)
                 return field.Mul(new Tensor(field.Result.Shape, 0.8))
-                    .Add(targetTensor.ElementwiseMultiply(new Tensor(targetTensor.Shape, 0.2)));
+                    .PradOp.Add(targetTensor.ElementwiseMultiply(new Tensor(targetTensor.Shape, 0.2)));
             });
             entropyField = new PradOp(newEntropyField.Result);
 
@@ -227,7 +219,7 @@ namespace Neurocious.Core.SpatialProbability
             // Update vector field to respect new field parameters
             var newVectorField = vectorField.Then(field => {
                 // Scale magnitude by curvature
-                var scaledField = field.ElementwiseMultiply(
+                var scaledField = field.Mul(
                     new Tensor(field.Result.Shape, 1.0 / (1.0 + curvatureScaling))
                 );
 
@@ -235,7 +227,7 @@ namespace Neurocious.Core.SpatialProbability
                 if (Math.Abs(fieldParams.Alignment) > 0.1)
                 {
                     var alignmentDirection = alignmentField.Result;
-                    scaledField = scaledField.Add(
+                    scaledField = scaledField.PradOp.Add(
                         alignmentDirection.ElementwiseMultiply(
                             new Tensor(alignmentDirection.Shape, alignmentScaling * 0.3)
                         )
@@ -263,12 +255,12 @@ namespace Neurocious.Core.SpatialProbability
             if (curvatureToEntropyStrength > 0.1)
             {
                 var entropyCoupling = curvatureField.Then(field => {
-                    return field.ElementwiseMultiply(
+                    return field.Mul(
                         new Tensor(field.Result.Shape, curvatureToEntropyStrength)
                     );
                 });
                 entropyField = new PradOp(
-                    entropyField.Add(entropyCoupling.Result).Then(PradOp.SoftmaxOp).Result
+                    entropyField.Add(entropyCoupling.Result).PradOp.SymmetricSoftmax().Result
                 );
             }
 
@@ -276,13 +268,13 @@ namespace Neurocious.Core.SpatialProbability
             if (entropyToAlignmentStrength > 0.1)
             {
                 var alignmentCoupling = entropyField.Then(field => {
-                    return field.ElementwiseMultiply(
+                    return field.Mul(
                         new Tensor(field.Result.Shape, entropyToAlignmentStrength)
                     );
                 });
                 alignmentField = new PradOp(
                     alignmentField.Add(alignmentCoupling.Result)
-                        .Then(x => x.Mul(new Tensor(x.Result.Shape, 0.5))).Result
+                        .PradOp.Then(x => x.Mul(new Tensor(x.Result.Shape, 0.5))).Result
                 );
             }
 
@@ -290,7 +282,7 @@ namespace Neurocious.Core.SpatialProbability
             if (alignmentToVectorStrength > 0.1)
             {
                 var vectorCoupling = alignmentField.Then(field => {
-                    return field.ElementwiseMultiply(
+                    return field.Mul(
                         new Tensor(field.Result.Shape, alignmentToVectorStrength)
                     );
                 });
@@ -300,16 +292,14 @@ namespace Neurocious.Core.SpatialProbability
             }
         }
 
-        internal (PradResult routing, PradResult confidence, FieldParameters fieldParams) RouteStateInternal(List<PradOp> sequence)
+        internal (PradResult routing, PradResult confidence, FieldParameters fieldParams, PradOp processedSequence) RouteStateInternal(List<PradOp> sequence)
         {
             // Project through VAE if available
-            var routingState = vaeModel != null
-               ? ProcessVAESequence(sequence)  // New helper method
-               : sequence.Last();  // Use last state if no VAE
+            var routingState = ProcessVAESequence(sequence);
 
             // Calculate base routing
-            var similarity = routingState.MatMul(vectorField.Transpose());
-            var baseRouting = similarity.Then(PradOp.SoftmaxOp);
+            var similarity = routingState.MatMul(vectorField.Transpose().Result);
+            var baseRouting = similarity.PradOp.SymmetricSoftmax();
 
             // Calculate field parameters
             var fieldParams = CalculateFieldParameters(routingState, baseRouting);
@@ -324,18 +314,24 @@ namespace Neurocious.Core.SpatialProbability
             // Calculate confidence
             var confidence = CalculateRoutingConfidence(fieldParams);
 
-            return (routing, confidence, fieldParams);
+            return (routing, confidence, fieldParams, routingState);
         }
 
         private PradOp ProcessVAESequence(List<PradOp> sequence)
         {
+            // Project through VAE if available
+            if (vaeModel == null)
+            {
+                return sequence.Last();
+            }
+
             var (mean, logVar) = vaeModel.EncodeSequence(sequence);
             return ReparameterizationTrick(mean, logVar);
         }
 
         private PradOp ReparameterizationTrick(PradResult mean, PradResult logVar)
         {
-            var std = logVar.Then(v => v.Mul(new Tensor(v.Result.Shape, 0.5)))
+            var std = logVar.PradOp.Then(v => v.Mul(new Tensor(v.Result.Shape, 0.5)))
                            .Then(PradOp.ExpOp);
 
             var epsilon = new Tensor(mean.Result.Shape,
@@ -343,30 +339,30 @@ namespace Neurocious.Core.SpatialProbability
                     .Select(_ => Random.Shared.NextGaussian())
                     .ToArray());
 
-            return mean.Add(std.Result.ElementwiseMultiply(epsilon));
+            return mean.PradOp.Add(std.PradOp.Mul(epsilon).Result).PradOp;
         }
 
         public void UpdateFields(PradResult route, PradResult reward, List<PradOp> sequence)
         {
             // Get current field parameters
-            var (_, _, fieldParams) = RouteStateInternal(sequence);
+            var (_, _, fieldParams, _) = RouteStateInternal(sequence);
 
             // Calculate adaptive learning rate
-            float adaptiveLearningRate = LEARNING_RATE *
+            float adaptiveLearningRate = (float)(LEARNING_RATE *
                 (1 - fieldParams.Entropy) *         // Learn more when certain
-                (1 / (1 + fieldParams.Curvature));  // Learn less in unstable regions
+                (1 / (1 + fieldParams.Curvature)));  // Learn less in unstable regions
 
             // Update vector field
-            var fieldUpdate = route.Then(r => {
-                var learningRateTensor = new Tensor(r.Result.Shape, adaptiveLearningRate);
-                return r.Mul(reward.Result).Mul(learningRateTensor);
+            var fieldUpdate = route.PradOp.Then(r => {
+                var learningRateTensor = new Tensor(r.Result.Shape, (double)adaptiveLearningRate);
+                return r.Mul(reward.Result).PradOp.Mul(learningRateTensor);
             });
 
             // Apply weighted update
             var alignmentWeight = Math.Abs(fieldParams.Alignment);
             vectorField = new PradOp(
-                vectorField.Mul(new Tensor(vectorField.CurrentShape, 1 - alignmentWeight * LEARNING_RATE)).Result
-                .Add(fieldUpdate.Result)
+                vectorField.Mul(new Tensor(vectorField.CurrentShape, 1 - alignmentWeight * LEARNING_RATE)).PradOp
+                .Add(fieldUpdate.Result).Result
             );
 
             // Normalize field
@@ -377,7 +373,7 @@ namespace Neurocious.Core.SpatialProbability
             ApplyBeliefCoupling(route, fieldParams);
 
             // Update neural components with TD learning
-            UpdateWithReward(reward.Result.Data[0]);
+            UpdateWithReward(reward.PradOp);
 
             // Update inverse flow field
             inverseFlowIntegration.UpdateFromForwardDynamics(vectorField, route);
@@ -637,24 +633,24 @@ namespace Neurocious.Core.SpatialProbability
             var curvatureUpdate = localParams.Curvature * (1 - FIELD_DECAY) +
                                 geometry.LocalCurvature * LEARNING_RATE;
             curvatureField = new PradOp(
-                curvatureField.Mul(new Tensor(curvatureField.CurrentShape, FIELD_DECAY)).Result
-                .Add(new Tensor(curvatureField.CurrentShape, curvatureUpdate))
+                curvatureField.Mul(new Tensor(curvatureField.CurrentShape, FIELD_DECAY)).PradOp
+                .Add(new Tensor(curvatureField.CurrentShape, curvatureUpdate)).Result
             );
 
             // Update entropy field with local divergence influence
             var entropyUpdate = localParams.Entropy * (1 - FIELD_DECAY) +
                               Math.Abs(geometry.LocalDivergence) * LEARNING_RATE;
             entropyField = new PradOp(
-                entropyField.Mul(new Tensor(entropyField.CurrentShape, FIELD_DECAY)).Result
-                .Add(new Tensor(entropyField.CurrentShape, entropyUpdate))
+                entropyField.Mul(new Tensor(entropyField.CurrentShape, FIELD_DECAY)).PradOp
+                .Add(new Tensor(entropyField.CurrentShape, entropyUpdate)).Result
             );
 
             // Update alignment field considering field rotation
             var alignmentUpdate = localParams.Alignment * (1 - FIELD_DECAY) +
                                 (1 - Math.Abs(geometry.LocalRotation)) * LEARNING_RATE;
             alignmentField = new PradOp(
-                alignmentField.Mul(new Tensor(alignmentField.CurrentShape, FIELD_DECAY)).Result
-                .Add(new Tensor(alignmentField.CurrentShape, alignmentUpdate))
+                alignmentField.Mul(new Tensor(alignmentField.CurrentShape, FIELD_DECAY)).PradOp
+                .Add(new Tensor(alignmentField.CurrentShape, alignmentUpdate)).Result
             );
         }
 
@@ -668,7 +664,7 @@ namespace Neurocious.Core.SpatialProbability
             };
         }
 
-        private void UpdateWithReward(float reward, float discountFactor = 0.99f)
+        private void UpdateWithReward(PradOp reward, float discountFactor = 0.99f)
         {
             if (temporalBuffer.Count < 2) return;
 
@@ -678,13 +674,14 @@ namespace Neurocious.Core.SpatialProbability
             var (_, currentValue) = policyNetwork.Forward(currentState, GetHistoryTensor());
             var (_, previousValue) = policyNetwork.Forward(previousState, GetHistoryTensor());
 
-            var tdError = reward + discountFactor * currentValue.Result.Data[0] - previousValue.Result.Data[0];
-            var tdLoss = new PradResult(new Tensor(new[] { 1 }, new[] { tdError }));
+            var discountOp = new PradOp(new Tensor(reward.CurrentShape, (double)discountFactor));
+            var tdLoss = discountOp.Mul(currentValue.Result).PradOp.Add(reward.CurrentTensor)
+                .PradOp.Sub(previousValue.Result);
 
             Back(tdLoss);
         }
 
-        private Tensor GetHistoryTensor()
+        private PradOp GetHistoryTensor()
         {
             var history = temporalBuffer.ToArray();
             var historyData = new double[bufferSize * stateDim];
@@ -699,7 +696,7 @@ namespace Neurocious.Core.SpatialProbability
                 Array.Clear(historyData, history.Length * stateDim, (bufferSize - history.Length) * stateDim);
             }
 
-            return new Tensor(new[] { bufferSize, stateDim }, historyData);
+            return new PradOp(new Tensor(new[] { bufferSize, stateDim }, historyData));
         }
 
         private static Tensor InitializeWeights(int inputDim, int outputDim)
@@ -785,7 +782,7 @@ namespace Neurocious.Core.SpatialProbability
                 return p.Then(PradOp.LnOp)
                         .Then(ln => ln.ElementwiseMultiply(p.Result))
                         .Then(prod => prod.Mean(axis: 0))
-                        .Then(mean => mean.Mul(new Tensor(mean.Result.Shape, -1.0)));
+                        .Then(mean => mean.Mul(new Tensor(mean.Result.Shape, -1.0d)));
             });
         }
 
