@@ -5,7 +5,7 @@ namespace Neurocious.Core.Chess
     /// <summary>
     /// Decodes latent representations back into chess positions and moves.
     /// </summary>
-    public class ChessDecoder
+    public class ChessDecoder : IChessDecoder
     {
         private const int BOARD_SIZE = 8;
         private const int CHANNELS = 12;

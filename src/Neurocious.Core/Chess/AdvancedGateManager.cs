@@ -7,7 +7,7 @@ using System.Threading.Tasks;
 
 namespace Neurocious.Core.Chess
 {
-    public class AdvancedGateManager
+    public class AdvancedGateManager : IAdvancedGateManager
     {
         private readonly Dictionary<string, StrategicGate> gates;
         private readonly Dictionary<string, GateMetrics> gateMetrics;
@@ -35,7 +35,7 @@ namespace Neurocious.Core.Chess
             }
         }
 
-        internal Dictionary<string, StrategicGate> Gates
+        public Dictionary<string, StrategicGate> Gates
         {
             get => gates;
         }
@@ -57,6 +57,24 @@ namespace Neurocious.Core.Chess
             {
                 AnalyzeForGateChanges();
             }
+        }
+
+        public List<(string Gate1, string Gate2)> GetHighlyCorrelatedPairs(float threshold = 0.85f)
+        {
+            return correlationTracker.GetHighlyCorrelatedPairs(threshold);
+        }
+
+        public List<string> GetInactiveGates(int window = 500, float activationThreshold = 0.05f)
+        {
+            return gateMetrics
+                .Where(m => m.Value.GetRecentActivationRate(window) < activationThreshold)
+                .Select(m => m.Key)
+                .ToList();
+        }
+
+        public List<string> GetCurrentHierarchicalGates()
+        {
+            return hierarchicalGates.Keys.ToList();
         }
 
         private void UpdateMetrics(TrajectoryMemory trajectory)
@@ -435,7 +453,7 @@ namespace Neurocious.Core.Chess
                 }
             }
 
-            public List<(string, string)> GetHighlyCorrelatedPairs(float threshold)
+            public List<(string Gate1, string Gate2)> GetHighlyCorrelatedPairs(float threshold)
             {
                 var correlatedPairs = new List<(string, string)>();
 

@@ -8,7 +8,7 @@ using System.Threading.Tasks;
 
 namespace Neurocious.Core.EnhancedVariationalAutoencoder
 {
-    public class AttentionBlock
+    public class AttentionBlock : IAttentionBlock
     {
         public PradOp QueryProj { get; private set; }
         public PradOp KeyProj { get; private set; }

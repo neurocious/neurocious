@@ -6,7 +6,7 @@ namespace Neurocious.Core.Chess
     /// <summary>
     /// Represents a strategic concept in chess as a point in latent space.
     /// </summary>
-    public class StrategicGate
+    public class StrategicGate : IStrategicGate
     {
         public string Name { get; }
         public float[] LatentVector { get; private set; }

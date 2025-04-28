@@ -5,7 +5,7 @@ namespace Neurocious.Core.Chess
     /// <summary>
     /// Encodes chess positions into tensor representations suitable for neural processing.
     /// </summary>
-    public class ChessEncoder
+    public class ChessEncoder : IChessEncoder
     {
         private const int BOARD_SIZE = 8;
         private const int CHANNELS = 12; // 6 piece types * 2 colors

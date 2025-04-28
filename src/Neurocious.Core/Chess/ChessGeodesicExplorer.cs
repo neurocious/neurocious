@@ -7,7 +7,7 @@ namespace Neurocious.Core.Chess
     /// <summary>
     /// Explores chess positions through high-dimensional latent space using field theory.
     /// </summary>
-    public class ChessGeodesicExplorer
+    public class ChessGeodesicExplorer : IChessGeodesicExplorer
     {
         private readonly EnhancedVAE architectVAE;
         private readonly EnhancedVAE explorerVAE;

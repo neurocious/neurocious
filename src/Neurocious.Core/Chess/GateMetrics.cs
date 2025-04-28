@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 
 namespace Neurocious.Core.Chess
 {
-    public class GateMetrics
+    public class GateMetrics : IGateMetrics
     {
         private readonly Queue<(DateTime time, float activation)> recentActivations;
         private readonly Dictionary<string, Queue<float>> temporalRelations;

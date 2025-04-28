@@ -8,7 +8,7 @@ using System.Threading.Tasks;
 
 namespace Neurocious.Core.EnhancedVariationalAutoencoder
 {
-    public class FieldRegularizer
+    public class FieldRegularizer : IFieldRegularizer
     {
         public PradResult ComputeLoss(FieldParameters fieldParams)
         {
