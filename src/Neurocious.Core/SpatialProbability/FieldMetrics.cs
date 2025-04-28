@@ -8,10 +8,9 @@ namespace Neurocious.Core.SpatialProbability
 {
     public class FieldMetrics
     {
-        public float GlobalEntropy { get; set; }
-        public float GlobalCurvature { get; set; }
-        public float GlobalAlignment { get; set; }
-        public float BeliefStability { get; set; }
-        public float CoherenceScore { get; set; }
+        public float AverageFlowStrength { get; init; }
+        public float DirectionalCoherence { get; init; }
+        public float BackwardConfidence { get; init; }
+        public Dictionary<string, float> FieldStatistics { get; init; }
     }
 }

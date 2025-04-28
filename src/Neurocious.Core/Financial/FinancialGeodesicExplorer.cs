@@ -5,7 +5,7 @@ using ParallelReverseAutoDiff.PRAD;
 
 namespace Neurocious.Core.Financial
 {
-    public class FinancialGeodesicExplorer
+    public class FinancialGeodesicExplorer : IFinancialGeodesicExplorer
     {
         private readonly EnhancedVAE architectVAE;
         private readonly EnhancedVAE explorerVAE;

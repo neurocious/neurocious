@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 
 namespace Neurocious.Core.Financial
 {
-    public class TechnicalAnalysis
+    public class TechnicalAnalysis : ITechnicalAnalysis
     {
         public double CalculateRSI(List<double> prices, int period = 14)
         {

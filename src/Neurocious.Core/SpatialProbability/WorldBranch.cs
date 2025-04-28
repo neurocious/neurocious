@@ -2,7 +2,7 @@
 
 namespace Neurocious.Core.SpatialProbability
 {
-    public class WorldBranch
+    public class WorldBranch : IWorldBranch
     {
         public SpatialProbabilityNetwork Network { get; }
         public float Value { get; private set; }

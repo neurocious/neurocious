@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 
 namespace Neurocious.Core.Financial
 {
-    public class TradeExecutor
+    public class TradeExecutor : ITradeExecutor
     {
         public Trade ExecuteTrade(
             PortfolioManager portfolio,

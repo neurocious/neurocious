@@ -5,7 +5,7 @@ namespace Neurocious.Core.Financial
     /// <summary>
     /// Encodes financial market snapshots into tensor representations.
     /// </summary>
-    public class FinancialEncoder
+    public class FinancialEncoder : IFinancialEncoder
     {
         private readonly int inputSize;
         private readonly bool normalizeFeatures;

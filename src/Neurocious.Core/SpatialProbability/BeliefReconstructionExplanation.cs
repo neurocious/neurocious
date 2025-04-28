@@ -7,7 +7,7 @@ using System.Threading.Tasks;
 
 namespace Neurocious.Core.SpatialProbability
 {
-    public class BeliefReconstructionExplanation
+    public class BeliefReconstructionExplanation : IBeliefReconstructionExplanation
     {
         public PradResult WarpedPriorState { get; set; }
         public float TemporalSmoothness { get; set; }

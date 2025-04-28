@@ -2,7 +2,7 @@
 
 namespace Neurocious.Core.SpatialProbability
 {
-    public class InverseFlowField
+    public class InverseFlowField : IInverseFlowField
     {
         private readonly int[] fieldShape;
         private readonly int vectorDim;
@@ -27,74 +27,6 @@ namespace Neurocious.Core.SpatialProbability
             InitializeFields();
             warpingNetwork = new WarpingModule(vectorDim, vectorDim * 2);
             contextEncoder = new ContextEncoder(this.contextDim, vectorDim);
-        }
-
-        public class InverseTransformationState
-        {
-            public PradResult WarpedState { get; init; }
-            public PradResult ContextualRouting { get; init; }
-            public float TemporalSmoothness { get; init; }
-            public Dictionary<string, float> ConfidenceMetrics { get; init; }
-            public float[] FlowDirection { get; init; }
-        }
-
-        public class TemporalRegularizer
-        {
-            private readonly Queue<Tensor> stateHistory;
-            private readonly int historyLength;
-            private readonly float smoothnessThreshold;
-
-            public TemporalRegularizer(int historyLength = 10, float smoothnessThreshold = 0.5f)
-            {
-                this.historyLength = historyLength;
-                this.smoothnessThreshold = smoothnessThreshold;
-                stateHistory = new Queue<Tensor>();
-            }
-
-            public (float smoothness, float confidence) AnalyzeTransition(
-                Tensor currentState,
-                Tensor previousState)
-            {
-                // Add to history
-                stateHistory.Enqueue(currentState);
-                if (stateHistory.Count > historyLength)
-                    stateHistory.Dequeue();
-
-                // Calculate transition smoothness
-                float transitionMagnitude = CalculateTransitionMagnitude(currentState, previousState);
-                float historicalAverage = CalculateHistoricalAverage();
-                float smoothness = 1.0f / (1.0f + Math.Abs(transitionMagnitude - historicalAverage));
-
-                // Calculate confidence based on smoothness
-                float confidence = smoothness > smoothnessThreshold ?
-                    smoothness : smoothness * (smoothness / smoothnessThreshold);
-
-                return (smoothness, confidence);
-            }
-
-            private float CalculateTransitionMagnitude(Tensor current, Tensor previous)
-            {
-                float sumSquaredDiff = 0;
-                for (int i = 0; i < current.Data.Length; i++)
-                {
-                    float diff = (float)(current.Data[i] - previous.Data[i]);
-                    sumSquaredDiff += diff * diff;
-                }
-                return (float)Math.Sqrt(sumSquaredDiff);
-            }
-
-            private float CalculateHistoricalAverage()
-            {
-                if (stateHistory.Count < 2) return 0;
-
-                float sum = 0;
-                var states = stateHistory.ToArray();
-                for (int i = 1; i < states.Length; i++)
-                {
-                    sum += CalculateTransitionMagnitude(states[i], states[i - 1]);
-                }
-                return sum / (states.Length - 1);
-            }
         }
 
         private class WarpingModule
@@ -379,14 +311,6 @@ namespace Neurocious.Core.SpatialProbability
             }
 
             return new Tensor(new[] { inputDim, outputDim }, weights);
-        }
-
-        public class FieldMetrics
-        {
-            public float AverageFlowStrength { get; init; }
-            public float DirectionalCoherence { get; init; }
-            public float BackwardConfidence { get; init; }
-            public Dictionary<string, float> FieldStatistics { get; init; }
         }
 
         public FieldMetrics CalculateMetrics()

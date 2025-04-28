@@ -10,7 +10,7 @@ namespace Neurocious.Core.Financial
     /// <summary>
     /// Decodes latent states into interpretable financial signals and trading decisions.
     /// </summary>
-    public class FinancialDecoder
+    public class FinancialDecoder : IFinancialDecoder
     {
         private const double DECISION_THRESHOLD = 0.1;
         private readonly Dictionary<string, (double lower, double upper)> actionThresholds;

@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 
 namespace Neurocious.Core.Financial
 {
-    public class BacktestEngine
+    public class BacktestEngine : IBacktestEngine
     {
         private readonly FinancialGeodesicExplorer explorer;
         private readonly FinancialMetrics metrics;

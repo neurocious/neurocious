@@ -1,13 +1,9 @@
 ﻿using ParallelReverseAutoDiff.PRAD;
-using System;
-using System.Collections.Generic;
-using System.Linq;
 using System.Text;
-using System.Threading.Tasks;
 
 namespace Neurocious.Core.SpatialProbability
 {
-    public class InverseFlowIntegration
+    public class InverseFlowIntegration : IInverseFlowIntegration
     {
         private readonly InverseFlowField inverseFlowField;
         private readonly TemporalBuffer temporalBuffer;
@@ -27,7 +23,7 @@ namespace Neurocious.Core.SpatialProbability
             PradOp contextState,
             List<string> potentialAntecedents = null)
         {
-            var regularizer = new InverseFlowField.TemporalRegularizer();
+            var regularizer = new TemporalRegularizer();
             var result = inverseFlowField.GeneratePreviousStateWithContext(
                 currentState,
                 contextState,
@@ -162,7 +158,7 @@ namespace Neurocious.Core.SpatialProbability
         }
 
         private string GenerateInverseJustification(
-            InverseFlowField.InverseTransformationState result,
+            InverseTransformationState result,
             Dictionary<string, float> attributionScores)
         {
             var sb = new StringBuilder();
@@ -190,7 +186,7 @@ namespace Neurocious.Core.SpatialProbability
         }
 
         private float CalculateReconstructionConfidence(
-            InverseFlowField.InverseTransformationState result)
+            InverseTransformationState result)
         {
             float temporalWeight = 0.4f;
             float routingWeight = 0.4f;

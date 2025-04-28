@@ -7,7 +7,7 @@ using System.Threading.Tasks;
 
 namespace Neurocious.Core.Financial
 {
-    public class TradingMetrics
+    public class TradingMetrics : ITradingMetrics
     {
         public double CalculateProfitFactor(List<Trade> trades)
         {

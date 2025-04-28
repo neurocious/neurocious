@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 
 namespace Neurocious.Core.Financial
 {
-    public class PortfolioManager
+    public class PortfolioManager : IPortfolioManager
     {
         public double InitialCapital { get; }
         public double CurrentValue { get; private set; }

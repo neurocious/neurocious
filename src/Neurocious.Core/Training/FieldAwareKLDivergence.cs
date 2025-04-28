@@ -3,7 +3,7 @@ using ParallelReverseAutoDiff.PRAD;
 
 namespace Neurocious.Core.Training
 {
-    public class FieldAwareKLDivergence
+    public class FieldAwareKLDivergence : IFieldAwareKLDivergence
     {
         private readonly SpatialProbabilityNetwork spn;
 
@@ -69,14 +69,6 @@ namespace Neurocious.Core.Training
                     .ToArray()));
 
             return (muField, sigmaFieldSquared);
-        }
-
-        public class FieldKLMetrics
-        {
-            public float BaseKL { get; init; }
-            public float FieldAlignmentScore { get; init; }
-            public float UncertaintyAdaptation { get; init; }
-            public Dictionary<string, float> DetailedMetrics { get; init; }
         }
 
         public FieldKLMetrics AnalyzeKLContribution(
