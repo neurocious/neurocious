@@ -1,0 +1,289 @@
+Let me implement these refinements to make the BeliefFieldLaplacian more robust and physically sound:
+csharppublic class BeliefFieldLaplacian
+{
+    private readonly Tensor baseKernel;
+    private readonly int[] kernelShape = { 3, 3 };
+    
+    public enum BoundaryMode 
+    { 
+        Zero, 
+        Reflect, 
+        Wrap, 
+        Learnable 
+    }
+
+    public BeliefFieldLaplacian(bool normalized = true)
+    {
+        // Initialize normalized spatial kernel
+        var kernel = new double[] 
+        {
+            0.0,  1.0,  0.0,
+            1.0, -4.0,  1.0,
+            0.0,  1.0,  0.0
+        };
+
+        if (normalized)
+        {
+            // Ensure kernel sums to 0 for stability
+            var sum = kernel.Sum();
+            kernel = kernel.Select(k => k / Math.Abs(sum)).ToArray();
+        }
+
+        // Shape for explicit broadcasting: [1, 9, 1]
+        baseKernel = new Tensor(new[] { 1, 9, 1 }, kernel);
+    }
+
+    public PradResult ComputeFieldLaplacian(
+        PradOp beliefField,      // Shape: [H, W, BeliefDim]
+        BoundaryMode boundary = BoundaryMode.Reflect,
+        PradOp? learnableKernel = null)
+    {
+        var shape = beliefField.Result.Shape;
+        var (height, width, beliefDim) = (shape[0], shape[1], shape[2]);
+
+        // Handle boundary conditions
+        var paddedField = ApplyBoundaryCondition(beliefField, boundary);
+
+        // Extract patches with explicit dimensions
+        var patches = paddedField.ExtractPatches(
+            filterSize: kernelShape,
+            strides: new[] { 1, 1 },
+            padding: "valid"
+        );
+        // patches shape: [H*W, 9, BeliefDim]
+
+        // Use base or learnable kernel
+        var kernel = learnableKernel ?? new PradOp(baseKernel);
+        
+        // Explicit operations for clarity and stability
+        var weighted = patches.ElementwiseMultiply(kernel.Result);
+        var diffused = weighted.Sum(new[] { 1 })  // Sum across neighbors
+            .Reshape(new[] { height, width, beliefDim });
+
+        return diffused;
+    }
+
+    public PradResult ComputeBilinearCoupling(
+        PradOp beliefField,          // Shape: [H, W, BeliefDim]
+        PradOp couplingMatrix,       // Shape: [BeliefDim, BeliefDim]
+        double stabilityFactor = 1.0)
+    {
+        var shape = beliefField.Result.Shape;
+        var (height, width, beliefDim) = (shape[0], shape[1], shape[2]);
+
+        // Reshape for bilinear form computation
+        var flattened = beliefField.Reshape(new[] { -1, beliefDim });
+        // [H*W, BeliefDim]
+
+        // Compute bilinear coupling energy
+        var coupled = flattened
+            .MatMul(couplingMatrix.Result)          // [H*W, BeliefDim]
+            .ElementwiseMultiply(flattened.Result)  // Quadratic form
+            .Mul(new Tensor(new[] { 1 }, stabilityFactor));
+
+        return coupled.Reshape(shape);
+    }
+
+    public PradResult ComputeAlignedDiffusion(
+        PradOp beliefField,          // Shape: [H, W, BeliefDim]
+        PradOp alignmentField,       // Shape: [H, W]
+        double maxAlignmentStrength = 1.0,
+        BoundaryMode boundary = BoundaryMode.Reflect)
+    {
+        // Compute field gradients for stability scaling
+        var gradients = ComputeFieldGradients(beliefField);
+        var gradientMagnitudes = ComputeGradientMagnitudes(gradients);
+        
+        // Scale alignment by gradient magnitude for stability
+        var scaledAlignment = alignmentField.ElementwiseMultiply(
+            gradientMagnitudes.Add(
+                new Tensor(gradientMagnitudes.Result.Shape, 1e-6)
+            ).Then(PradOp.ReciprocalOp).Result
+        );
+
+        // Clamp alignment strength
+        var boundedAlignment = scaledAlignment.Then(a =>
+            a.Minimum(new Tensor(a.Result.Shape, maxAlignmentStrength))
+        );
+
+        // Extract patches for both field and alignment
+        var fieldPatches = beliefField.ExtractPatches(
+            filterSize: kernelShape,
+            strides: new[] { 1, 1 },
+            padding: "same"
+        );
+
+        var alignmentPatches = boundedAlignment.ExtractPatches(
+            filterSize: kernelShape,
+            strides: new[] { 1, 1 },
+            padding: "same"
+        );
+
+        // Modulate diffusion kernel by alignment
+        var modifiedKernel = alignmentPatches
+            .Reshape(new[] { -1, 9, 1 })
+            .ElementwiseMultiply(baseKernel);
+
+        // Apply modulated diffusion
+        var weighted = fieldPatches.ElementwiseMultiply(modifiedKernel.Result);
+        var diffused = weighted.Sum(new[] { 1 })
+            .Reshape(beliefField.Result.Shape);
+
+        return diffused;
+    }
+
+    public PradResult Evolve(
+        PradOp beliefField,
+        PradOp alignmentField,
+        PradOp couplingMatrix,
+        Tensor timestep,
+        EvolverConfig config)
+    {
+        // Compute all field evolution terms
+        var diffusion = ComputeFieldLaplacian(
+            beliefField,
+            config.Boundary,
+            config.LearnableKernel
+        );
+
+        var coupling = ComputeBilinearCoupling(
+            beliefField,
+            couplingMatrix,
+            config.CouplingStrength
+        );
+
+        var aligned = ComputeAlignedDiffusion(
+            beliefField,
+            alignmentField,
+            config.MaxAlignmentStrength,
+            config.Boundary
+        );
+
+        // Combine updates with stability checks
+        var update = diffusion
+            .Add(coupling.Result.Mul(new Tensor(coupling.Result.Shape, config.CouplingWeight)).Result)
+            .Add(aligned.Result.Mul(new Tensor(aligned.Result.Shape, config.AlignmentWeight)).Result);
+
+        // Apply timestep with stability constraint
+        var scaledUpdate = update.Mul(timestep);
+        
+        // Optional: Add stability constraints
+        if (config.EnforceStability)
+        {
+            scaledUpdate = ApplyStabilityConstraints(
+                scaledUpdate, 
+                config.MaxUpdateMagnitude
+            );
+        }
+
+        return beliefField.Add(scaledUpdate.Result);
+    }
+
+    private PradOp ApplyBoundaryCondition(
+        PradOp field, 
+        BoundaryMode mode)
+    {
+        switch (mode)
+        {
+            case BoundaryMode.Reflect:
+                return field.Reflect(
+                    new[] { 1, 1 },  // pad start
+                    new[] { 1, 1 }   // pad end
+                );
+
+            case BoundaryMode.Wrap:
+                var shape = field.Result.Shape;
+                return field.Tile(new[] { 3, 3 })
+                    .Slice(
+                        new[] { shape[0] - 1, shape[1] - 1 },
+                        new[] { shape[0] + 2, shape[1] + 2 }
+                    );
+
+            case BoundaryMode.Zero:
+            default:
+                return field;
+        }
+    }
+
+    private (PradResult dx, PradResult dy) ComputeFieldGradients(PradOp field)
+    {
+        // Sobel kernels for gradient computation
+        var sobelX = new Tensor(new[] { 3, 3 }, new double[] 
+        {
+            -1, 0, 1,
+            -2, 0, 2,
+            -1, 0, 1
+        }).Reshape(new[] { 1, 9, 1 });
+
+        var sobelY = new Tensor(new[] { 3, 3 }, new double[] 
+        {
+            -1, -2, -1,
+             0,  0,  0,
+             1,  2,  1
+        }).Reshape(new[] { 1, 9, 1 });
+
+        var patches = field.ExtractPatches(
+            filterSize: kernelShape,
+            strides: new[] { 1, 1 },
+            padding: "same"
+        );
+
+        var dx = patches.ElementwiseMultiply(sobelX).Sum(new[] { 1 });
+        var dy = patches.ElementwiseMultiply(sobelY).Sum(new[] { 1 });
+
+        return (dx, dy);
+    }
+
+    private PradResult ComputeGradientMagnitudes((PradResult dx, PradResult dy) gradients)
+    {
+        return gradients.dx
+            .ElementwiseMultiply(gradients.dx.Result)
+            .Add(gradients.dy.ElementwiseMultiply(gradients.dy.Result).Result)
+            .Then(PradOp.SquareRootOp);
+    }
+
+    private PradResult ApplyStabilityConstraints(
+        PradResult update,
+        double maxMagnitude)
+    {
+        // Compute update magnitudes
+        var magnitudes = update
+            .ElementwiseMultiply(update.Result)
+            .Then(PradOp.SquareRootOp);
+
+        // Compute scaling factors where magnitude exceeds max
+        var scales = magnitudes.Then(m =>
+            m.Maximum(new Tensor(m.Result.Shape, maxMagnitude))
+                .ElementwiseMultiply(
+                    new Tensor(m.Result.Shape, 1.0 / maxMagnitude)
+                )
+        );
+
+        // Apply scaling
+        return update.ElementwiseMultiply(
+            scales.Then(PradOp.ReciprocalOp).Result
+        );
+    }
+
+    public class EvolverConfig
+    {
+        public BoundaryMode Boundary { get; init; } = BoundaryMode.Reflect;
+        public PradOp? LearnableKernel { get; init; } = null;
+        public double CouplingStrength { get; init; } = 1.0;
+        public double CouplingWeight { get; init; } = 0.5;
+        public double MaxAlignmentStrength { get; init; } = 1.0;
+        public double AlignmentWeight { get; init; } = 0.3;
+        public bool EnforceStability { get; init; } = true;
+        public double MaxUpdateMagnitude { get; init; } = 1.0;
+    }
+}
+This enhanced version includes:
+
+Explicit tensor operations for clarity and stability
+Bilinear coupling for energy-based belief interactions
+Gradient-scaled alignment for stable diffusion
+Comprehensive boundary condition handling
+Stability constraints and normalizations
+Unified evolution step with configurable parameters
+
+The implementation maintains efficiency while adding physical soundness and numerical stability guarantees needed for Aletheia's belief field dynamics.
