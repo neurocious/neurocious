@@ -1,0 +1,636 @@
+Let's implement these enhancements:
+csharppublic class LearnableVectorField : ITrainableModule
+{
+    private readonly RiemannianBeliefManifold manifold;
+    private readonly NeuralFieldEncoder fieldEncoder;
+    private readonly MetricAwareInterpolator interpolator;
+    
+    // Learnable components
+    private PradOp directionNetwork;  // Learns vector directions
+    private PradOp magnitudeNetwork;  // Learns ridge heights
+    private PradOp alignmentNetwork;  // Learns alignment scoring
+
+    public class FieldQualityMetrics
+    {
+        public float AveragePathLength { get; init; }
+        public float PathDeviation { get; init; }
+        public float CurvatureAlignment { get; init; }
+        public float RidgeQuality { get; init; }
+        public Dictionary<string, float> DetailedStats { get; init; }
+    }
+
+    public async Task<FieldQualityMetrics> EvaluateFieldQuality(
+        VectorField field,
+        List<PradOp> knownPaths)
+    {
+        var metrics = new List<Task<(string key, float value)>>();
+
+        // 1. Path Length Analysis
+        metrics.Add(ComputeAveragePathLength(field, knownPaths)
+            .ContinueWith(t => ("avg_length", t.Result)));
+
+        // 2. Path Deviation
+        metrics.Add(ComputePathDeviation(field, knownPaths)
+            .ContinueWith(t => ("deviation", t.Result)));
+
+        // 3. Curvature Alignment
+        metrics.Add(ComputeCurvatureAlignment(field)
+            .ContinueWith(t => ("curvature_align", t.Result)));
+
+        // 4. Ridge Quality
+        metrics.Add(EvaluateRidgeQuality(field)
+            .ContinueWith(t => ("ridge_quality", t.Result)));
+
+        var results = await Task.WhenAll(metrics);
+        var detailedStats = results.ToDictionary(r => r.key, r => r.value);
+
+        return new FieldQualityMetrics
+        {
+            AveragePathLength = detailedStats["avg_length"],
+            PathDeviation = detailedStats["deviation"],
+            CurvatureAlignment = detailedStats["curvature_align"],
+            RidgeQuality = detailedStats["ridge_quality"],
+            DetailedStats = detailedStats
+        };
+    }
+
+    public class NeuralVectorFieldModule : IPradModule
+    {
+        private readonly RiemannianBeliefManifold manifold;
+        private readonly FieldNetworkConfig config;
+
+        private readonly PradOp encoder;      // Encodes belief states
+        private readonly PradOp fieldNet;     // Generates vector field
+        private readonly PradOp directionNet; // Refines directions
+        
+        public async Task<PradResult> Forward(
+            PradOp currentBelief,
+            PradOp goalBelief,
+            FieldContext context = null)
+        {
+            // 1. Encode beliefs into field space
+            var encoding = await encoder.MatMul(
+                ConcatBeliefs(currentBelief, goalBelief));
+
+            // 2. Generate local vector field
+            var fieldOutput = await fieldNet.MatMul(encoding);
+            
+            // 3. Get direction refinement
+            var direction = await directionNet.MatMul(
+                ConcatFields(fieldOutput, context?.LocalField));
+
+            // 4. Apply metric conditioning
+            return await ApplyMetricConditioning(
+                direction, 
+                await manifold.GetLocalMetric(currentBelief));
+        }
+
+        public async Task<PradResult> TrainStep(
+            TrainingBatch batch,
+            OptimizationConfig config)
+        {
+            var loss = new PradOp(new Tensor(new[] { 1 }, new[] { 0.0 }));
+
+            foreach (var (current, goal, target) in batch.Samples)
+            {
+                // Forward pass
+                var predicted = await Forward(current, goal);
+
+                // Compute losses
+                var directionLoss = ComputeDirectionLoss(predicted, target);
+                var smoothnessLoss = ComputeSmoothnessLoss(predicted);
+                var metricLoss = ComputeMetricConsistencyLoss(predicted);
+
+                // Combine losses
+                loss = loss.Add(
+                    directionLoss.Add(
+                        smoothnessLoss.Mul(
+                            new Tensor(smoothnessLoss.Result.Shape, 
+                                config.SmoothnessWeight))
+                        .Add(metricLoss.Mul(
+                            new Tensor(metricLoss.Result.Shape,
+                                config.MetricWeight)))
+                        .Result)
+                    .Result);
+            }
+
+            // Backward pass
+            loss.Back();
+
+            return loss;
+        }
+    }
+
+    public class MetricAwareInterpolator
+    {
+        private readonly RiemannianBeliefManifold manifold;
+
+        public async Task<LocalFieldValue> InterpolateWithMetric(
+            VectorField field,
+            PradOp position)
+        {
+            // Get local metric
+            var metric = await manifold.GetLocalMetric(position);
+            var inverseMetric = await manifold.GetInverseMetric(position);
+
+            // Find nearest points with metric-aware distance
+            var (indices, weights) = await FindNearestPointsMetric(
+                position, field, metric);
+
+            // Initialize interpolation
+            var direction = new double[manifold.Dimension];
+            var magnitude = 0.0;
+
+            // Interpolate with metric awareness
+            for (int i = 0; i < indices.Length; i++)
+            {
+                var idx = indices[i];
+                var weight = weights[i];
+
+                // Get field vector
+                var fieldVector = ExtractFieldVector(field, idx);
+
+                // Adjust vector using inverse metric
+                var adjusted = inverseMetric.MatMul(
+                    new PradOp(new Tensor(
+                        new[] { manifold.Dimension },
+                        fieldVector
+                    )));
+
+                // Add to interpolation
+                for (int d = 0; d < manifold.Dimension; d++)
+                {
+                    direction[d] += adjusted.Result.Data[d] * weight;
+                }
+                magnitude += field.Magnitudes.Result.Data[idx] * weight;
+            }
+
+            // Final metric adjustment
+            var finalDirection = metric.MatMul(
+                new PradOp(new Tensor(
+                    new[] { manifold.Dimension },
+                    direction
+                )));
+
+            return new LocalFieldValue
+            {
+                Direction = finalDirection,
+                Magnitude = magnitude
+            };
+        }
+
+        private async Task<(int[] indices, float[] weights)> FindNearestPointsMetric(
+            PradOp position,
+            VectorField field,
+            PradOp metric,
+            int k = 4)
+        {
+            var distances = new List<(int index, float distance)>();
+            var fieldPoints = await GetFieldPoints(field);
+
+            // Compute metric-aware distances
+            for (int i = 0; i < fieldPoints.Count; i++)
+            {
+                var diff = position.Sub(fieldPoints[i].Result);
+                var metricDist = diff.MatMul(metric.Result)
+                    .MatMul(diff.Transpose().Result);
+                
+                distances.Add((i, (float)Math.Sqrt(metricDist.Result.Data[0])));
+            }
+
+            // Get k nearest
+            var nearest = distances.OrderBy(d => d.distance)
+                .Take(k).ToList();
+
+            // Compute weights using RBF kernel
+            var sigma = nearest[k-1].distance;
+            var weights = nearest.Select(n => 
+                (float)Math.Exp(-n.distance * n.distance / (2 * sigma * sigma)))
+                .ToArray();
+
+            // Normalize weights
+            var sum = weights.Sum();
+            for (int i = 0; i < weights.Length; i++)
+                weights[i] /= sum;
+
+            return (nearest.Select(n => n.index).ToArray(), weights);
+        }
+    }
+
+    public class RiemannianOptimizer
+    {
+        private readonly RiemannianBeliefManifold manifold;
+        private readonly float learningRate;
+
+        public async Task<PradOp> RiemannianGradientStep(
+            PradOp position,
+            PradOp gradient)
+        {
+            // 1. Project gradient to tangent space
+            var metric = await manifold.GetLocalMetric(position);
+            var tangentGradient = await ProjectToTangentSpace(
+                gradient, position, metric);
+
+            // 2. Scale by learning rate
+            var scaled = tangentGradient.Mul(
+                new Tensor(tangentGradient.Result.Shape, -learningRate));
+
+            // 3. Use exponential map for update
+            return await manifold.ExpMap(position, scaled);
+        }
+
+        private async Task<PradResult> ProjectToTangentSpace(
+            PradOp vector,
+            PradOp point,
+            PradOp metric)
+        {
+            // Project vector onto tangent space using metric
+            return vector.MatMul(metric.Result);
+        }
+    }
+}
+Key enhancements:
+
+Field Quality Evaluation:
+
+Path length metrics
+Deviation from known good paths
+Curvature alignment analysis
+Ridge quality assessment
+
+
+Neural Vector Field:
+
+End-to-end trainable module
+Belief state encoding
+Field generation network
+Direction refinement network
+
+
+Metric-Aware Interpolation:
+
+Uses local metric for distance
+Adjusts vectors with inverse metric
+Weighted interpolation with RBF kernel
+Preserves geometric structure
+
+
+Riemannian Optimization:
+
+Tangent space gradient projection
+Exponential map updates
+Metric-aware learning rate scaling
+
+
+
+These improvements make the vector field:
+
+Learnable from experience
+Geometrically consistent
+More efficient at path finding
+Better at preserving manifold structure
+
+---
+
+I'll show how to integrate the learnable vector field with the SPN, particularly focusing on how it can enhance both geodesic computation and belief routing:
+csharppublic class EnhancedSpatialProbabilityNetwork
+{
+    private readonly RiemannianBeliefManifold manifold;
+    private readonly LearnableVectorField learnableField;
+    private readonly NeuralVectorFieldModule neuralField;
+    private readonly FieldMemoryBuffer fieldBuffer;
+
+    public class FieldMemoryBuffer
+    {
+        private readonly Dictionary<string, VectorField> successfulFields;
+        private readonly PriorityQueue<string, float> fieldScores;
+        
+        public async Task StoreSuccessfulField(
+            VectorField field, 
+            float quality,
+            BeliefTransition transition)
+        {
+            var key = ComputeTransitionKey(transition);
+            successfulFields[key] = field;
+            fieldScores.Enqueue(key, quality);
+        }
+
+        public async Task<VectorField> RetrieveSimilarField(
+            BeliefTransition transition)
+        {
+            var key = ComputeTransitionKey(transition);
+            return successfulFields.GetValueOrDefault(key);
+        }
+    }
+
+    // Enhanced ProcessState that uses learnable vector fields
+    public async Task<(PradResult routing, PradResult confidence, PradResult policy,
+        PradResult reflexes, PradResult predictions, FieldParameters fieldParams,
+        BeliefExplanation explanation)> ProcessState(PradOp state)
+    {
+        // Get current position on manifold
+        var currentPosition = await manifold.ProjectToManifold(state);
+
+        // Try to retrieve similar successful field
+        var transition = new BeliefTransition
+        {
+            FromBeliefId = GetCurrentBeliefId(),
+            ToBeliefId = null, // exploring
+            Type = TransitionType.Exploration
+        };
+
+        var existingField = await fieldBuffer.RetrieveSimilarField(transition);
+
+        // Generate or use vector field
+        var vectorField = existingField ?? await neuralField.Forward(
+            currentPosition,
+            GetTargetState(),
+            GetFieldContext());
+
+        // Compute field-guided routing
+        var (routing, fieldMetrics) = await ComputeFieldGuidedRouting(
+            currentPosition,
+            vectorField
+        );
+
+        // Update field based on routing success
+        await UpdateFieldFromRouting(
+            vectorField,
+            routing,
+            fieldMetrics
+        );
+
+        // Generate remaining components with field awareness
+        var confidence = await ComputeFieldAwareConfidence(
+            routing,
+            fieldMetrics
+        );
+
+        var policy = await GenerateFieldGuidedPolicy(
+            currentPosition,
+            vectorField,
+            routing
+        );
+
+        var reflexes = await ComputeFieldAwareReflexes(
+            currentPosition,
+            vectorField
+        );
+
+        var predictions = await GenerateFieldBasedPredictions(
+            currentPosition,
+            vectorField,
+            routing
+        );
+
+        // Extract field parameters
+        var fieldParams = await ExtractFieldParameters(
+            vectorField,
+            routing
+        );
+
+        // Generate enhanced explanation
+        var explanation = await GenerateFieldAwareExplanation(
+            currentPosition,
+            vectorField,
+            routing,
+            fieldMetrics
+        );
+
+        return (routing, confidence, policy, reflexes, predictions, 
+                fieldParams, explanation);
+    }
+
+    private async Task<(PradResult routing, FieldMetrics metrics)> 
+        ComputeFieldGuidedRouting(PradOp position, VectorField field)
+    {
+        // 1. Get field-based direction
+        var fieldDirection = await learnableField.InterpolateWithMetric(
+            field,
+            position
+        );
+
+        // 2. Compute base routing probabilities
+        var baseRouting = await ComputeBaseRouting(position);
+
+        // 3. Blend with field guidance
+        var fieldGuidance = await ComputeFieldGuidance(
+            fieldDirection,
+            position
+        );
+
+        var blendedRouting = await BlendRoutings(
+            baseRouting,
+            fieldGuidance,
+            await ComputeBlendingFactor(fieldDirection)
+        );
+
+        // 4. Compute field metrics
+        var metrics = await ComputeFieldMetrics(
+            field,
+            position,
+            blendedRouting
+        );
+
+        return (blendedRouting, metrics);
+    }
+
+    private async Task UpdateFieldFromRouting(
+        VectorField field,
+        PradResult routing,
+        FieldMetrics metrics)
+    {
+        // 1. Evaluate routing quality
+        var quality = await EvaluateRoutingQuality(
+            routing,
+            metrics
+        );
+
+        // 2. Update neural field if quality is good
+        if (quality > 0.7f)
+        {
+            await neuralField.UpdateFromSuccess(
+                field,
+                routing,
+                quality
+            );
+        }
+
+        // 3. Store successful field
+        if (quality > 0.8f)
+        {
+            await fieldBuffer.StoreSuccessfulField(
+                field,
+                quality,
+                GetCurrentTransition()
+            );
+        }
+
+        // 4. Update field parameters
+        await learnableField.UpdateFieldParameters(
+            field,
+            routing,
+            metrics
+        );
+    }
+
+    private async Task<PradResult> GenerateFieldGuidedPolicy(
+        PradOp position,
+        VectorField field,
+        PradResult routing)
+    {
+        // 1. Get base policy
+        var basePolicy = await policyNetwork.Forward(
+            position,
+            GetHistoryTensor()
+        );
+
+        // 2. Get field-based policy guidance
+        var fieldPolicy = await ComputeFieldBasedPolicy(
+            field,
+            position
+        );
+
+        // 3. Combine policies using field confidence
+        var fieldConfidence = await ComputeFieldConfidence(
+            field,
+            routing
+        );
+
+        return await BlendPolicies(
+            basePolicy,
+            fieldPolicy,
+            fieldConfidence
+        );
+    }
+
+    private async Task<PradResult> GenerateFieldBasedPredictions(
+        PradOp position,
+        VectorField field,
+        PradResult routing)
+    {
+        // 1. Get field-guided future states
+        var futureStates = await PredictAlongField(
+            position,
+            field,
+            steps: 5
+        );
+
+        // 2. Generate predictions for each state
+        var predictions = await Task.WhenAll(
+            futureStates.Select(async state =>
+                await predictionNetwork.Forward(state))
+        );
+
+        // 3. Weight predictions by field confidence
+        return await WeightPredictions(
+            predictions,
+            await ComputeFieldConfidences(field, futureStates)
+        );
+    }
+
+    private async Task<BeliefExplanation> GenerateFieldAwareExplanation(
+        PradOp position,
+        VectorField field,
+        PradResult routing,
+        FieldMetrics metrics)
+    {
+        return new BeliefExplanation
+        {
+            BeliefLabel = await GetBeliefLabel(routing),
+            FeatureContributions = await ComputeFieldContributions(
+                field,
+                routing
+            ),
+            Confidence = metrics.RoutingConfidence,
+            FieldParams = await ExtractFieldParameters(field, routing),
+            Justification = await GenerateFieldJustification(
+                field,
+                routing,
+                metrics
+            ),
+            TopContributingFeatures = await GetTopFieldFeatures(
+                field,
+                routing
+            ),
+            CounterfactualShifts = await ComputeFieldCounterfactuals(
+                field,
+                position
+            ),
+            TrajectoryPath = await GetFieldGuidedPath(
+                field,
+                position
+            )
+        };
+    }
+
+    // Training integration
+    public async Task<float> TrainStep(
+        List<BeliefTransition> transitions,
+        TrainingConfig config)
+    {
+        float totalLoss = 0;
+
+        foreach (var transition in transitions)
+        {
+            // 1. Generate vector field for transition
+            var field = await neuralField.Forward(
+                await manifold.ProjectToManifold(transition.FromState),
+                await manifold.ProjectToManifold(transition.ToState)
+            );
+
+            // 2. Compute field quality
+            var quality = await learnableField.EvaluateFieldQuality(
+                field,
+                new List<PradOp> { transition.ObservedPath }
+            );
+
+            // 3. Update field based on quality
+            var fieldLoss = await neuralField.TrainStep(
+                new TrainingBatch(transition, quality),
+                config
+            );
+
+            totalLoss += fieldLoss.Result.Data[0];
+        }
+
+        return totalLoss / transitions.Count;
+    }
+}
+This integration provides:
+
+Field-Guided Routing:
+
+Uses learned vector fields for guidance
+Blends with traditional routing
+Adapts based on success
+
+
+Field Memory:
+
+Stores successful vector fields
+Retrieves similar fields for new situations
+Continuously improves field quality
+
+
+Enhanced Components:
+
+Field-aware policy generation
+Field-guided predictions
+Rich explanations with field context
+
+
+Training Integration:
+
+Learns from successful transitions
+Improves field quality over time
+Maintains memory of good fields
+
+
+
+The result is a system that:
+
+Learns efficient paths through belief space
+Remembers successful routing strategies
+Provides richer explanations
+Continuously improves routing quality
