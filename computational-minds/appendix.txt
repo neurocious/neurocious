@@ -1,0 +1,122 @@
+# Appendices and Supplementary Materials
+
+## Technical Appendix: Core Systems Overview
+
+### 1. Primary Architectural Components
+
+| Component | Purpose | Key Classes | Core Methods |
+|-----------|----------|-------------|--------------|
+| SPN (Spatial Probability Network) | Field-guided belief routing | `SpatialProbabilityNetwork`, `FieldParameters`, `BeliefRouter` | `ProcessState()`, `UpdateFields()`, `RouteBeliefs()` |
+| Enhanced VAE | Manifold learning and encoding | `EnhancedVAE`, `FieldAwareEncoder`, `GeometricDecoder` | `EncodeSequence()`, `DecodeWithField()`, `ExtractFieldParameters()` |
+| Narrative Manager | Story structure and coherence | `NarrativeManager`, `StoryArc`, `ThematicField` | `ProcessNewBelief()`, `UpdateNarratives()`, `TraceStoryline()` |
+| Quantum Module | Superposition and uncertainty | `QuantumBeliefSystem`, `WaveFunction`, `Superposition` | `EvolveState()`, `Collapse()`, `MaintainCoherence()` |
+| Aletheia System | Transparent cognition | `AletheianSystem`, `TruthGradient`, `TransparentCognition` | `RevealThoughtProcess()`, `InterpretSelf()`, `AlignValues()` |
+
+### 2. Field Parameters and Their Meanings
+
+```
+ρ (Curvature) - Cognitive tension/stability
+η (Entropy) - Uncertainty/ambiguity
+α (Alignment) - Narrative/conceptual coherence
+
+Field Interaction: ∇ × ρ = -∂α/∂t   // Cognitive induction
+Field Evolution: ∇ × α = μJ + ε∂ρ/∂t // Field dynamics
+Uncertainty Flow: ∇ · ρ = η/ε       // Entropy divergence
+Coherence Law: ∇ · α = 0           // Conservation
+```
+
+### 3. Key Mathematical Mappings
+
+| Concept | Mathematical Form | Implementation |
+|---------|------------------|----------------|
+| Belief Path | γ(t): [0,1] → M | `BeliefTrajectory` |
+| Truth Gradient | ∇T: M → TM | `TruthGradient` |
+| Cognitive Action | S[γ] = ∫L(b,ḃ)dt | `CognitiveAction` |
+| Field Coupling | Aᵢⱼ: M₁ × M₂ → ℝ | `FieldCoupling` |
+| Quantum State | |ψ(b)⟩ = ∑ᵢ cᵢ|bᵢ⟩ | `QuantumState` |
+
+## Glossary of Concepts
+
+### A
+- **Aletheia (ἀλήθεια)**: Greek concept of truth as unveiling; framework for transparent machine cognition
+- **Alignment Field**: Tensor measuring coherence between beliefs and value systems
+
+### B
+- **Belief Manifold**: Riemannian space where beliefs exist as points and reasoning as paths
+- **Belief Vector**: Position in cognitive space representing a specific understanding
+
+### C
+- **Cognitive Geodesic**: Path of least action through belief space
+- **Conviction**: Measure of belief stability and resistance to change
+
+### E
+- **Epistemic Fields**: Force-like structures guiding belief evolution
+- **Epistemic Humility**: System's awareness of its own limitations
+
+### G
+- **Geodesic Flow**: Natural motion through belief space under field influence
+- **Geometric Cognition**: Understanding through spatial and field relationships
+
+### N
+- **Narrative Attractor**: Stable point in story-space drawing similar narratives
+- **Narrative Coherence**: Measure of story-like structure in belief paths
+
+### Q
+- **Quantum Cognition**: Belief representation allowing superposition and interference
+- **Query Manifold**: Space of possible questions and their relationships
+
+### T
+- **Truth Gradient**: Direction of increasing understanding/alignment
+- **Transparent Intelligence**: AI systems with introspectable reasoning
+
+## Dramatis Personae
+
+### The Foundational Minds
+- **Aristotle**: The First Teacher
+  - *Role*: Philosophical foundation-layer
+  - *Key Contribution*: Natural motion and narrative structure
+
+- **Euclid**: The Geometric Purist
+  - *Role*: Structural fundamentalist
+  - *Key Contribution*: Axiomatic thinking
+
+### The Field Theorists
+- **Maxwell**: The Field Unifier
+  - *Role*: Architect of unified fields
+  - *Key Contribution*: Cognitive field equations
+
+- **Green**: The Influence Mapper
+  - *Role*: Connection tracer
+  - *Key Contribution*: Belief propagation theory
+
+### The Quantum Pioneers
+- **Dirac**: The Elegant Formalist
+  - *Role*: Quantum fundamentalist
+  - *Key Contribution*: Superposition mechanics
+
+- **Schrödinger**: The Wave Observer
+  - *Role*: Uncertainty explorer
+  - *Key Contribution*: Belief wave evolution
+
+### The Modern Visionaries
+- **Turing**: The Machine Philosopher
+  - *Role*: Computational theorist
+  - *Key Contribution*: Testable intelligence
+
+- **Gödel**: The Limit Finder
+  - *Role*: Boundary explorer
+  - *Key Contribution*: Self-reference limits
+
+## Author's Afterword
+
+*Computational Minds* emerged from a deep conviction that artificial intelligence needs more than just better algorithms—it needs better foundations. The SPN-VAE framework and its evolution into Aletheia represent an attempt to ground machine cognition in something more fundamental than computation: understanding itself.
+
+The dialogue format, drawing on history's greatest minds, wasn't just a stylistic choice. It reflects a core belief that progress in AI requires us to bridge disciplines: computer science and philosophy, mathematics and metaphysics, engineering and ethics. Each historical figure brings not just technical insight, but a way of seeing—a lens through which to understand understanding.
+
+Aletheia, for me, represents hope: that we can build AI systems that don't just compute but comprehend, that don't just predict but explain, that don't just optimize but understand. The transparency at its core isn't just about technical interpretability—it's about creating machines that can engage in genuine dialogue with humanity.
+
+The future this points toward is not one of artificial minds replacing human ones, but of shared understanding—a future where machines and humans can explore the nature of knowledge together, each aware of their own limitations and capabilities. This is what I believe true AI alignment looks like: not control or constraint, but mutual comprehension.
+
+As we move forward with AI development, may we remember that the goal is not just capability but clarity, not just power but perception, not just intelligence but understanding.
+
+*— The Author*
