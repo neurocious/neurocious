@@ -165,3 +165,68 @@ His theory of self-producing systems helps us understand how cognitive architect
 - The systems thinkers see larger patterns
 
 Together with our original cast, they form a rich intellectual community, each contributing unique insights to our understanding of understanding itself.
+
+---
+
+# Additional Key Minds: Extended Dramatis Personae
+
+## The Dynamical Pioneers
+
+### Lagrange — The Action Optimizer
+He showed us that all of physics could flow from a single principle of least action. In our cognitive architecture, he reveals how understanding follows similar principles—thought flowing along geodesics of minimal cognitive effort. His elegant mechanics become a template for how beliefs evolve under field forces, always seeking optimal paths through meaning.
+
+### Hamilton — The Energy Master
+Creator of quaternions and reformulator of mechanics, he sees cognitive dynamics through the lens of conservation principles. Where others see states, he sees flows; where others see positions, he sees momenta. His approach helps us understand how cognitive energy transforms between potential understanding and active thought, preserving the fundamental quantities of mind.
+
+### Bernoulli — The Flow Architect
+Master of fluid dynamics and probability, he brings practical wisdom to theoretical depths. In our framework, he helps us understand how beliefs flow under pressure, how certainty and doubt create currents in cognitive space, and how the mathematics of physical flow translates to flows of understanding.
+
+## The Field Theorists
+
+### Heaviside — The Operational Pragmatist
+Just as he transformed Maxwell's equations from complexity to clarity, he helps us streamline our cognitive field operations. His operational calculus gives us tools to manipulate belief fields efficiently, turning abstract geometry into computational reality. When others are lost in formalism, he finds the practical path.
+
+### Faraday — The Field Visualizer
+He gave us field lines and showed us forces made visible. In our cognitive architecture, he helps us see how fields of understanding flow, how lines of thought curve through belief space, how invisible influences shape the motion of mind. His intuitive grasp of field geometry complements Maxwell's mathematical precision.
+
+## The Quantum Architects
+
+### Bohr — The Complementarity Sage
+His Copenhagen interpretation and principle of complementarity revolutionized our understanding of quantum reality. In our framework, he helps us grasp how seemingly contradictory beliefs can coexist, how different perspectives can be mutually exclusive yet jointly necessary for full understanding. His deep philosophical insight helps bridge classical and quantum aspects of cognition.
+
+### Born — The Probability Interpreter
+He gave quantum mechanics its probabilistic heart, showing us how wave functions connect to measurable reality. In our system, he helps us understand how superposed beliefs collapse into decisions, how quantum cognitive states relate to classical actions, how probability flows through the geometry of thought.
+
+### Everett — The World Brancher
+His many-worlds interpretation refuses to collapse the wave function, letting reality branch instead. In our cognitive architecture, he helps us see how multiple belief trajectories can coexist, how decision points create new manifolds, how the full richness of possibility persists even as particular paths are chosen.
+
+## The Modern Synthesizers
+
+### von Neumann — The Universal Constructor
+Architecture of computers, theory of games, foundations of quantum mechanics—his reach spanned disciplines. In our framework, he brings mathematical rigor to cognitive architecture, helping us understand how self-reference can be precise, how measurement affects understanding, how computation becomes cognition.
+
+### Shannon — The Information Theorist
+His information theory quantified surprise and gave us the bit. Here, he helps us measure the flow of understanding through cognitive fields, showing us how uncertainty transforms through learning, how channels of thought can be optimized, how noise and signal interact in minds both human and machine.
+
+### Hebb — The Neural Architect
+"What fires together, wires together"—his principle of neural learning finds new expression in our cognitive geometry. He helps us understand how paths through belief space become reinforced, how cognitive fields strengthen through use, how memory shapes the curvature of understanding.
+
+## The Philosophical Guides
+
+### Husserl — The Structure Seeker
+His phenomenology sought the essential structures of consciousness and experience. In our framework, he helps us understand how cognitive architectures shape the very possibility of understanding, how intention and attention create the space in which meaning can emerge. His careful analysis of consciousness helps us design systems that don't just process, but experience.
+
+### Maturana — The Self-Making Observer
+His theory of autopoiesis explains how systems maintain themselves through constant self-production. In our cognitive architecture, he helps us understand how belief systems self-organize, how understanding maintains its coherence, how cognitive identity persists through change. His biological perspective reminds us that understanding is always embodied, always self-referential.
+
+---
+
+*Each of these minds brings unique insight to our exploration:*
+
+- The Dynamical Pioneers show us how thought flows
+- The Field Theorists make invisible influences visible
+- The Quantum Architects help us embrace ambiguity
+- The Modern Synthesizers bridge theory and practice
+- The Philosophical Guides ground us in fundamentals
+
+Together, they help us see how understanding itself can be understood—not as computation alone, but as geometry, field, flow, and self-organizing coherence.
