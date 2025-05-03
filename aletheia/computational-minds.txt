@@ -1,0 +1,25 @@
+🧑‍🏫 Expanded Historical Figures for Computational Minds
+Name	Core Contribution	Role in Your Narrative
+Aristotle	Natural motion, qualitative physics	The philosophical starting point—motion as essence, not measurement
+Euclid	Axiomatic geometry	The structural purist; space as static, ordered, and provable
+Galileo Galilei	Experimental method, free fall, acceleration	The empirical rebel; introduces measurement, falsifiability, and physical modeling
+Johannes Kepler	Planetary motion, laws of orbits	The pattern seeker; transitions from geometry to dynamics through data
+Isaac Newton	Fluxions, laws of motion, classical mechanics	The architect of causality; motion as deterministic calculus
+Gottfried Wilhelm Leibniz	Differential and integral calculus	The symbolic philosopher; sees knowledge and computation as structured logic
+Johann Bernoulli	Separable ODEs, applied calculus	The practical solver; bridges abstract methods and physical systems
+Brook Taylor	Taylor series	The function analyzer; connects derivatives to infinite behavior
+Michel Rolle	Rolle’s Theorem, critique of infinitesimals	The critic of foundations; pushes rigor into early calculus
+Leonhard Euler	ODEs, function theory, infinite series	The great systematizer; shows the power of formalism across disciplines
+Jean-Baptiste Fourier	Heat equation, Fourier series	The decomposer of complexity; introduces basis functions and field modeling
+Joseph-Louis Lagrange	Variational principles, Lagrangian mechanics	The optimizer; motion and computation as solutions to constrained minimization
+William Rowan Hamilton	Quaternions, Hamiltonian mechanics	The unifier; space, algebra, and energy as one geometry of flow
+Pierre-Simon Laplace	Potential theory, deterministic mechanics	The symmetry seeker; a universe governed by balance and smoothness
+James Clerk Maxwell	Electromagnetism, coupled PDEs	The synthesizer; field theory as mathematical unification
+Paul Dirac	Relativistic quantum mechanics	The mystic algebraist; elegant equations that predict reality
+Erwin Schrödinger	Wave mechanics, quantum states	The probability philosopher; waves of possibility and inference
+Henri Poincaré	Chaos, topology, qualitative systems	The boundary-pusher; discovers unpredictability inside deterministic systems
+Bernhard Riemann	Curved space, manifold geometry	The reshaper of space; defines geometry as variable, not absolute
+George Green	Green’s functions, influence mapping	The field whisperer; shows how one point influences another mathematically
+Carl Friedrich Gauss	Curvature, geodesy, foundational analysis	The silent precisionist; lays deep ground for space, error, and structure
+Alan Turing	Computability, Turing machines, AI theory	The logic of mind; defines limits and possibilities of mechanical reasoning
+Kurt Gödel	Incompleteness theorems, logic foundations	The limits philosopher; shows that formal systems always leave something unsaid
