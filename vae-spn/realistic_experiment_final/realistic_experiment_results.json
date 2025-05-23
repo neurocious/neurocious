@@ -1,0 +1,111 @@
+{
+  "performance": {
+    "neurocious_sharpe_ratio": 5.79,
+    "neurocious_hit_rate": 0.6,
+    "beta_vae_sharpe_ratio": -6.96,
+    "beta_vae_hit_rate": 0.42,
+    "assessment": "\ud83c\udfc6 WORLD-CLASS",
+    "winner": "\ud83c\udfc6 NEUROCIOUS WINS"
+  },
+  "comparison": [
+    {
+      "Model": "Random Walk",
+      "Annual Return": "20.1%",
+      "Volatility": "10.9%",
+      "Sharpe Ratio": "1.52",
+      "Max Drawdown": "-3.4%",
+      "Hit Rate": "48.0%",
+      "Profit Factor": "1.48",
+      "Prediction MSE": "0.0014",
+      "Regime Accuracy": "0.0%",
+      "Information Ratio": "3.47"
+    },
+    {
+      "Model": "Buy and Hold",
+      "Annual Return": "-67.6%",
+      "Volatility": "32.5%",
+      "Sharpe Ratio": "-3.57",
+      "Max Drawdown": "-21.8%",
+      "Hit Rate": "44.0%",
+      "Profit Factor": "0.53",
+      "Prediction MSE": "0.0012",
+      "Regime Accuracy": "60.0%",
+      "Information Ratio": "3.49"
+    },
+    {
+      "Model": "\u03b2-VAE",
+      "Annual Return": "-47.5%",
+      "Volatility": "9.7%",
+      "Sharpe Ratio": "-6.96",
+      "Max Drawdown": "-12.1%",
+      "Hit Rate": "42.0%",
+      "Profit Factor": "0.19",
+      "Prediction MSE": "0.0102",
+      "Regime Accuracy": "0.0%",
+      "Information Ratio": "2.71"
+    },
+    {
+      "Model": "Neurocious",
+      "Annual Return": "23.6%",
+      "Volatility": "3.4%",
+      "Sharpe Ratio": "5.79",
+      "Max Drawdown": "-0.1%",
+      "Hit Rate": "60.0%",
+      "Profit Factor": "9.14",
+      "Prediction MSE": "0.0095",
+      "Regime Accuracy": "0.0%",
+      "Information Ratio": "3.86"
+    }
+  ],
+  "training_losses": {
+    "neurocious": [
+      -0.13904053824288504,
+      -0.19076806093965257,
+      -0.36948222454105106,
+      -0.13095666501404984,
+      -0.1458470778805869,
+      -0.16331506201199122,
+      -0.18234348084245408,
+      -0.20650772218193328,
+      -0.25020488670894075,
+      -0.4307560409818377,
+      -0.44471736678055357,
+      -0.4648811306272234,
+      -0.5554038648094449,
+      -0.3705448316676276,
+      -0.717940594468798,
+      -0.4611454265458243,
+      -0.4556638364280973,
+      -0.4923758102314813,
+      -0.654181786945888,
+      -0.3257116356066295
+    ],
+    "beta_vae": [
+      0.24730130285024643,
+      0.23987916111946106,
+      0.2534774137394769,
+      0.11170277425221034,
+      -0.03343100207192557,
+      -0.07988683134317398,
+      -0.007780956370489938,
+      -0.008988358080387115,
+      -0.02791572255747659,
+      -0.07430562004446983,
+      -0.1512647122144699,
+      -0.16806488590581076,
+      -0.18218608626297542,
+      -0.18387914448976517,
+      -0.1766331163900239,
+      -0.18938687656606948,
+      -0.2217010036110878,
+      -0.056084186903068,
+      -0.3626856356859207,
+      0.3269470749156816
+    ]
+  },
+  "config": {
+    "training_days": 100,
+    "test_days": 50,
+    "epochs": 20
+  }
+}
