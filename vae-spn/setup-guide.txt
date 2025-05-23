@@ -1,0 +1,20 @@
+# Create conda environment
+conda create -n neurocious python=3.9
+conda activate neurocious
+
+# Install dependencies
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+pip install numpy matplotlib seaborn pyyaml asyncio pathlib dataclasses
+pip install jupyter notebook  # for experimentation
+
+# Create project structure
+mkdir neurocious_project
+cd neurocious_project
+mkdir data checkpoints logs configs
+
+# Save the Python modules to separate files:
+# - neurocious_core.py
+# - enhanced_vae.py  
+# - spatial_probability_network.py
+# - epistemic_cotraining.py
+# - neurocious_main.py
