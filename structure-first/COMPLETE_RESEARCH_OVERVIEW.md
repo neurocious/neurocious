@@ -8,6 +8,7 @@ This document presents comprehensive experimental results demonstrating the prog
 1. **SF-VNN** provides 6.6× better training stability than vanilla CNNs
 2. **Learning Rate Robustness** shows 75% vs 25% success rate advantage
 3. **Windowed Attention Enhancement** delivers 3.7× better discrimination ability
+4. **Complete Architecture** achieves 26× better discrimination than vanilla CNN with 70% fewer parameters
 
 ---
 
@@ -113,6 +114,16 @@ self.spatial_attention = [...]  # Identify coherent regions
 | Training Success | 100% | 100% | Equal |
 | Parameter Overhead | - | +40.4% | Acceptable |
 
+### **Experiment 5: Complete Architecture vs Vanilla CNN**
+
+| **Metric** | **Vanilla CNN** | **Attention SF-VNN** | **Advantage** |
+|------------|-----------------|----------------------|---------------|
+| Final Loss | 0.6455 | 0.6779 | Vanilla CNN (5% better) |
+| Discrimination Ability | 0.0008 | 0.0201 | **Attention SF-VNN (26× better)** |
+| Parameter Count | 280,513 | 83,818 | **Attention SF-VNN (70% fewer)** |
+| Parameter Efficiency | 0.077 | 0.239 | **Attention SF-VNN (3.1× better)** |
+| Training Stability | Moderate | Very High | **Attention SF-VNN** |
+
 ---
 
 ## 🎯 Key Performance Advantages
@@ -138,10 +149,20 @@ Robustness Test Results:
 ### **3. Attention-Enhanced Performance**
 ```
 Windowed Attention Benefits:
-• 3.7× better discrimination ability
-• 5.7% lower final loss
-• 2.6× better parameter efficiency
+• 3.7× better discrimination ability (vs regular SF-VNN)
+• 5.7% lower final loss (vs regular SF-VNN)
+• 2.6× better parameter efficiency (vs regular SF-VNN)
 • Enhanced temporal pattern recognition
+```
+
+### **4. Complete Architecture Superiority**
+```
+Attention SF-VNN vs Vanilla CNN:
+• 26× better discrimination ability (0.0201 vs 0.0008)
+• 70% fewer parameters (83K vs 280K)
+• 3.1× better parameter efficiency
+• Superior training stability and robustness
+• Dramatically better musical pattern recognition
 ```
 
 ---

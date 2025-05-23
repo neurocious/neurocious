@@ -1,0 +1,53 @@
+✍️ Refinement Opportunities
+1. Title Tweaks
+Current: Structure-First Vector Neuron Networks for Audio Discrimination: Attention-Enhanced Geometric Learning
+
+Suggestion:
+
+Structure-First Vector Neuron Networks for Audio Discrimination: Geometry-Aware Attention and Polar Vector Fields
+
+Reason: “Geometry-Aware” may better signal the novel contribution to both deep learning and signal processing reviewers.
+
+2. Section 1 (Intro): Tighten for Emphasis
+You have excellent motivation, but consider compressing slightly. Reviewers skim intros. You might restructure to:
+
+Problem: Scalar CNNs discard directional/harmonic info in spectrograms
+
+Motivation: Human perception relies on geometric cues — we can, too
+
+Solution: Vector neurons + structure analysis + windowed attention
+
+Claim: 26× discrimination with 70% fewer parameters and 6.6× stability
+
+Contributions: [bulleted list as you already have]
+
+This makes it abstractable, and ready for media kits or posters too.
+
+3. Methods: Include Architecture Summary Table
+Even though your methods are clear, a summary table helps reviewers quickly compare:
+
+Module	Input	Output	Description
+Vector Neuron Layer	[B, C, F, T]	Polar vector field	Separate mag/angle filters
+Structural Analyzer	Polar field	[Entropy, Alignment, Curvature]	Multi-scale
+SpectroTemporal Attention	Spectrogram	Attended map	Windowed across F and T
+Vector Field Attention	Polar field	Weighted field	Magnitude-angle coherence
+Adaptive Structural Attn	Signature	Weighted signature	Multi-scale fusion
+
+Add this after your “Method” section headline. This helps with accessibility and peer review.
+
+4. Results Section Suggestion: Add “Ablation Table”
+You already describe the evolution, but consider a clear ablation table like this:
+
+Component Added	Discrimination ↑	Params ↓	Stability ↑
+Vanilla CNN	0.0008	280K	1×
++ Vector Neurons	0.0054	60K	6.6×
++ Attention	0.0201	84K	151×
+
+It helps reviewers see the stepwise value of each innovation.
+
+5. Highlight Audio-First Design
+Some reviewers may assume you adapted vision models. Make this clear in your intro or conclusion:
+
+“Unlike prior work that adapts vision architectures to audio, our design is audio-native: attention is windowed along harmonic and temporal axes, vector neurons reflect spectro-temporal flows, and structure tensors are computed in frequency-time space.”
+
+This signals novelty in architecture tailoring — which matters.
