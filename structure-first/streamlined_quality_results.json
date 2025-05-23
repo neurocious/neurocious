@@ -1,0 +1,33 @@
+{
+  "model_parameters": {
+    "sf_vnn": 381504,
+    "vanilla": 280513,
+    "generator": 13926017
+  },
+  "audio_quality_sample_1": {
+    "mel_l1_distance": 207.4683074951172,
+    "simplified_fad": 40989.85546875,
+    "rms_difference": 0.2902683615684509,
+    "spectral_centroid_diff": 3532.6044921875,
+    "overall_quality_score": 124.41751861572266
+  },
+  "audio_quality_sample_2": {
+    "mel_l1_distance": 207.4683074951172,
+    "simplified_fad": 40989.85546875,
+    "rms_difference": 0.2902700901031494,
+    "spectral_centroid_diff": 3505.05517578125,
+    "overall_quality_score": 124.41475677490234
+  },
+  "discriminator_predictions": {
+    "sf_vnn": {
+      "real": 0.6284469366073608,
+      "fake_1": 0.630138635635376,
+      "fake_2": 0.629525899887085
+    },
+    "vanilla": {
+      "real": 0.5016008615493774,
+      "fake_1": 0.5000002384185791,
+      "fake_2": 0.5000002384185791
+    }
+  }
+}

@@ -1,0 +1,76 @@
+{
+  "stability_results": {
+    "lr_0.0001": {
+      "sf_stable": true,
+      "vanilla_stable": true,
+      "sf_variance": 1.0089710133698305e-06,
+      "vanilla_variance": 2.1249338667281847e-05,
+      "winner": "SF-VNN",
+      "sf_final_loss": 0.7211681604385376,
+      "vanilla_final_loss": 0.6880199909210205
+    },
+    "lr_0.0005": {
+      "sf_stable": true,
+      "vanilla_stable": true,
+      "sf_variance": 3.00221407336565e-05,
+      "vanilla_variance": 9.133000287580018e-05,
+      "winner": "SF-VNN",
+      "sf_final_loss": 0.7051534056663513,
+      "vanilla_final_loss": 0.6617777943611145
+    },
+    "lr_0.001": {
+      "sf_stable": true,
+      "vanilla_stable": true,
+      "sf_variance": 0.00016847848277169673,
+      "vanilla_variance": 0.0003132954498852314,
+      "winner": "SF-VNN",
+      "sf_final_loss": 0.6769320964813232,
+      "vanilla_final_loss": 0.6403042674064636
+    },
+    "lr_0.003": {
+      "sf_stable": true,
+      "vanilla_stable": true,
+      "sf_variance": 0.0023994928642623848,
+      "vanilla_variance": 0.002004143534648506,
+      "winner": "Vanilla",
+      "sf_final_loss": 0.5649829506874084,
+      "vanilla_final_loss": 0.5583617687225342
+    }
+  },
+  "adaptation_results": {
+    "sine": {
+      "sf_initial": 0.0001856088638305664,
+      "sf_final": 0.00013333559036254883,
+      "sf_improvement": -5.227327346801758e-05,
+      "vanilla_initial": 0.0006093978881835938,
+      "vanilla_final": 0.0046465396881103516,
+      "vanilla_improvement": 0.004037141799926758,
+      "winner": "Vanilla"
+    },
+    "noise": {
+      "sf_initial": 0.0015516281127929688,
+      "sf_final": 0.0026093125343322754,
+      "sf_improvement": 0.0010576844215393066,
+      "vanilla_initial": 0.005853027105331421,
+      "vanilla_final": 0.01173853874206543,
+      "vanilla_improvement": 0.005885511636734009,
+      "winner": "Vanilla"
+    },
+    "sweep": {
+      "sf_initial": 0.00014698505401611328,
+      "sf_final": 0.0007687807083129883,
+      "sf_improvement": 0.000621795654296875,
+      "vanilla_initial": 0.01196068525314331,
+      "vanilla_final": 0.018033504486083984,
+      "vanilla_improvement": 0.006072819232940674,
+      "winner": "Vanilla"
+    }
+  },
+  "compelling_evidence": [
+    "Learning Rate Robustness: SF-VNN more stable in 3/4 LR tests"
+  ],
+  "summary": {
+    "total_evidence_points": 1,
+    "strong_evidence": false
+  }
+}
