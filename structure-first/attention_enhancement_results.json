@@ -1,0 +1,26 @@
+{
+  "regular_sfvnn": {
+    "final_loss": 0.7188520431518555,
+    "loss_variance": 1.0519290936233322e-06,
+    "avg_stability": 0.8095799804984949,
+    "discrimination": 0.005442281564076741,
+    "success_rate": 1.0,
+    "parameters": 59712,
+    "efficiency": 0.09114217517545453
+  },
+  "attention_sfvnn": {
+    "final_loss": 0.6778949499130249,
+    "loss_variance": 3.4889335024419974e-05,
+    "avg_stability": 0.37297971071600783,
+    "discrimination": 0.020072912176450092,
+    "success_rate": 1.0,
+    "parameters": 83818,
+    "efficiency": 0.23948211811842435
+  },
+  "attention_advantages": [
+    "Lower final loss",
+    "Better discrimination ability",
+    "Better parameter efficiency"
+  ],
+  "strong_evidence": true
+}

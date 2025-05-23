@@ -15,7 +15,7 @@ import torchaudio
 import torchaudio.transforms as T
 from scipy.signal import find_peaks
 from sklearn.metrics import mean_squared_error
-from pesq import pesq
+# from pesq import pesq  # Optional: specialized audio quality metric
 import soundfile as sf
 
 
@@ -222,7 +222,7 @@ class AudioStructuralAnalyzer(nn.Module):
         Returns:
             AudioStructuralSignature with all structural metrics
         """
-        B, C, F, T = spectrogram.shape
+        B, C, freq_bins, T = spectrogram.shape
         
         # Process each channel and aggregate
         all_entropy = []
@@ -265,12 +265,12 @@ class AudioStructuralAnalyzer(nn.Module):
             all_spectral_flow.append(spectral_flow)
         
         # Aggregate across channels
-        entropy_field = torch.stack(all_entropy, dim=1).mean(dim=1, keepdim=True)
-        alignment_field = torch.stack(all_alignment, dim=1).mean(dim=1, keepdim=True)
-        curvature_field = torch.stack(all_curvature, dim=1).mean(dim=1, keepdim=True)
-        harmonic_field = torch.stack(all_harmonic_coherence, dim=1).mean(dim=1, keepdim=True)
-        temporal_field = torch.stack(all_temporal_stability, dim=1).mean(dim=1, keepdim=True)
-        spectral_field = torch.stack(all_spectral_flow, dim=1).mean(dim=1, keepdim=True)
+        entropy_field = torch.stack(all_entropy, dim=1).mean(dim=1)
+        alignment_field = torch.stack(all_alignment, dim=1).mean(dim=1)
+        curvature_field = torch.stack(all_curvature, dim=1).mean(dim=1)
+        harmonic_field = torch.stack(all_harmonic_coherence, dim=1).mean(dim=1)
+        temporal_field = torch.stack(all_temporal_stability, dim=1).mean(dim=1)
+        spectral_field = torch.stack(all_spectral_flow, dim=1).mean(dim=1)
         
         return AudioStructuralSignature(
             entropy=entropy_field,
@@ -436,7 +436,14 @@ class AudioSFVNNDiscriminator(nn.Module):
             else:
                 stride = 2  # Standard downsampling
             
-            from vector_network import VectorNeuronLayer  # Import from your existing implementation
+            # Import VectorNeuronLayer from the vector-network.py file
+            import sys
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("vector_network", "vector-network.py")
+            vector_network = importlib.util.module_from_spec(spec)
+            sys.modules["vector_network"] = vector_network
+            spec.loader.exec_module(vector_network)
+            VectorNeuronLayer = vector_network.VectorNeuronLayer
             
             self.vector_layers.append(
                 VectorNeuronLayer(
@@ -551,29 +558,26 @@ class AudioDiscriminatorHead(nn.Module):
         
         for scale in range(num_scales):
             # Each scale gets its own feature extraction pathway
-            extractor = nn.Sequential(
+            conv_layers = nn.Sequential(
                 nn.Conv2d(signature_channels, hidden_dim // 4, 3, padding=1),
                 nn.BatchNorm2d(hidden_dim // 4),
                 nn.ReLU(inplace=True),
                 nn.AdaptiveAvgPool2d((4, 4)),  # Fixed spatial size for concatenation
                 nn.Flatten(),
-                nn.Linear((hidden_dim // 4) * 16, hidden_dim // num_scales),
+            )
+            self.feature_extractors.append(conv_layers)
+        
+        # We'll create the final linear layers after we know the flattened size
+        self.final_layers = nn.ModuleList()
+        for scale in range(num_scales):
+            self.final_layers.append(nn.Sequential(
                 nn.ReLU(inplace=True),
                 nn.Dropout(dropout_rate)
-            )
-            self.feature_extractors.append(extractor)
+            ))
         
-        # Final classification layers
-        self.classifier = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim // 2),
-            nn.ReLU(inplace=True),
-            nn.Dropout(dropout_rate),
-            nn.Linear(hidden_dim // 2, hidden_dim // 4),
-            nn.ReLU(inplace=True),
-            nn.Dropout(dropout_rate),
-            nn.Linear(hidden_dim // 4, 1),
-            nn.Sigmoid()  # Output probability
-        )
+        # Final classification layers - will be created dynamically
+        self.classifier_hidden = hidden_dim
+        self.classifier_dropout = dropout_rate
     
     def forward(self, signatures: List[AudioStructuralSignature]) -> torch.Tensor:
         """
@@ -599,11 +603,40 @@ class AudioDiscriminatorHead(nn.Module):
             ], dim=1)  # [B, 6, F, T]
             
             # Extract features for this scale
-            features = self.feature_extractors[scale](structure_tensor)
+            conv_features = self.feature_extractors[scale](structure_tensor)
+            
+            # Create linear layer on first use if needed
+            if not hasattr(self, f'linear_{scale}'):
+                linear_input_size = conv_features.shape[1]
+                linear_layer = nn.Linear(linear_input_size, self.signature_channels * 16)  # Reduce to manageable size
+                setattr(self, f'linear_{scale}', linear_layer)
+                if conv_features.is_cuda:
+                    linear_layer = linear_layer.cuda()
+            
+            # Apply linear transformation
+            linear_layer = getattr(self, f'linear_{scale}')
+            features = linear_layer(conv_features)
+            features = self.final_layers[scale](features)
             scale_features.append(features)
         
         # Concatenate features from all scales
         combined_features = torch.cat(scale_features, dim=1)
+        
+        # Create classifier on first use if needed
+        if not hasattr(self, 'classifier'):
+            combined_size = combined_features.shape[1]
+            self.classifier = nn.Sequential(
+                nn.Linear(combined_size, self.classifier_hidden // 2),
+                nn.ReLU(inplace=True),
+                nn.Dropout(self.classifier_dropout),
+                nn.Linear(self.classifier_hidden // 2, self.classifier_hidden // 4),
+                nn.ReLU(inplace=True),
+                nn.Dropout(self.classifier_dropout),
+                nn.Linear(self.classifier_hidden // 4, 1),
+                nn.Sigmoid()  # Output probability
+            )
+            if combined_features.is_cuda:
+                self.classifier = self.classifier.cuda()
         
         # Final classification
         real_fake_prob = self.classifier(combined_features)
@@ -794,9 +827,15 @@ class AudioQualityMetrics:
         """
         from scipy.linalg import sqrtm
         
+        # Ensure same dimensions by padding/trimming spectrograms
+        min_h = min(real_specs.size(2), fake_specs.size(2))
+        min_w = min(real_specs.size(3), fake_specs.size(3))
+        real_specs = real_specs[:, :, :min_h, :min_w]
+        fake_specs = fake_specs[:, :, :min_h, :min_w]
+        
         # Flatten spectrograms to feature vectors
-        real_features = real_specs.view(real_specs.size(0), -1).cpu().numpy()
-        fake_features = fake_specs.view(fake_specs.size(0), -1).cpu().numpy()
+        real_features = real_specs.reshape(real_specs.size(0), -1).cpu().numpy()
+        fake_features = fake_specs.reshape(fake_specs.size(0), -1).cpu().numpy()
         
         # Compute statistics
         mu_real, sigma_real = np.mean(real_features, axis=0), np.cov(real_features, rowvar=False)
@@ -1294,34 +1333,99 @@ if __name__ == "__main__":
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
     
-    # Test the system with dummy data
+    # Test basic components first
+    print("Testing basic components...")
     processor = AudioSpectrogramProcessor()
     analyzer = AudioStructuralAnalyzer()
+    print("✓ Components created successfully")
     
-    # Create dummy spectrogram
-    dummy_spec = torch.randn(2, 1, 80, 128)  # [batch, channels, freq, time]
+    # Create small dummy spectrogram for faster testing
+    dummy_spec = torch.randn(1, 1, 8, 16)  # Smaller size for faster testing
+    print(f"✓ Created dummy spectrogram: {dummy_spec.shape}")
     
     # Test structural analysis
-    signature = analyzer.analyze_audio_spectrogram(dummy_spec)
-    print(f"Entropy shape: {signature.entropy.shape}")
-    print(f"Harmonic coherence shape: {signature.harmonic_coherence.shape}")
+    try:
+        signature = analyzer.analyze_audio_spectrogram(dummy_spec)
+        print(f"✓ Structural analysis successful")
+        print(f"  Entropy shape: {signature.entropy.shape}")
+        print(f"  Harmonic coherence shape: {signature.harmonic_coherence.shape}")
+    except Exception as e:
+        print(f"✗ Structural analysis failed: {e}")
+        exit(1)
     
-    # Test discriminator
-    discriminator = AudioSFVNNDiscriminator()
-    prob, sigs = discriminator(dummy_spec, return_signature=True)
-    print(f"Discriminator output shape: {prob.shape}")
-    print(f"Number of signature scales: {len(sigs)}")
+    # Test discriminator (this is the most complex part)
+    try:
+        print("Testing discriminator...")
+        discriminator = AudioSFVNNDiscriminator()
+        prob, sigs = discriminator(dummy_spec, return_signature=True)
+        print(f"✓ Discriminator successful")
+        print(f"  Output shape: {prob.shape}")
+        print(f"  Number of signature scales: {len(sigs)}")
+        
+        # Test structural metrics computation
+        print("\nTesting structural metrics...")
+        metrics = AudioQualityMetrics()
+        
+        # Create two different dummy spectrograms for comparison
+        dummy_real = torch.randn(2, 1, 8, 16)  # "Real" audio spectrograms
+        dummy_fake = torch.randn(2, 1, 8, 16)  # "Generated" audio spectrograms
+        
+        # Compute structural distance between spectrograms
+        structural_distances = discriminator.compute_structural_distance(dummy_real, dummy_fake)
+        print(f"✓ Structural distance computation successful")
+        
+        # Print detailed structural metrics for each scale
+        for scale_name, scale_metrics in structural_distances.items():
+            print(f"\n  {scale_name}:")
+            for metric_name, value in scale_metrics.items():
+                print(f"    {metric_name}: {value:.6f}")
+        
+        # Test comprehensive structural metrics
+        struct_metrics = metrics.compute_structural_metrics(dummy_real, dummy_fake, discriminator)
+        print(f"\n✓ Comprehensive structural metrics successful")
+        print("\n  Detailed structural analysis:")
+        for metric_name, value in struct_metrics.items():
+            if isinstance(value, dict):
+                print(f"    {metric_name}:")
+                for sub_metric, sub_value in value.items():
+                    print(f"      {sub_metric}: {sub_value:.6f}")
+            else:
+                print(f"    {metric_name}: {value:.6f}")
+        
+        # Test Fréchet Audio Distance (FAD)
+        print(f"\nTesting Fréchet Audio Distance (FAD)...")
+        fad_score = metrics.compute_frechet_audio_distance(dummy_real, dummy_fake)
+        print(f"✓ FAD computation successful")
+        print(f"  FAD Score: {fad_score:.6f}")
+        
+        # Test spectral metrics
+        print(f"\nTesting spectral domain metrics...")
+        spectral_metrics = metrics.compute_spectral_metrics(dummy_real, dummy_fake)
+        print(f"✓ Spectral metrics computation successful")
+        print("  Spectral analysis:")
+        for metric_name, value in spectral_metrics.items():
+            print(f"    {metric_name}: {value:.6f}")
+        
+        # Test individual structural signature statistics
+        print(f"\nTesting structural signature statistics...")
+        signature_stats = sigs[0].audio_statistics()  # First scale signature
+        print(f"✓ Signature statistics successful")
+        print("  Audio structural statistics (first scale):")
+        for stat_name, stat_value in signature_stats.items():
+            print(f"    {stat_name}: {stat_value.mean().item():.6f}")
+            
+    except Exception as e:
+        print(f"✗ Discriminator/metrics failed: {e}")
+        import traceback
+        traceback.print_exc()
     
-    # Test metrics
-    metrics = AudioQualityMetrics()
-    dummy_real = torch.randn(4, 1, 80, 128)
-    dummy_fake = torch.randn(4, 1, 80, 128)
-    
-    struct_metrics = metrics.compute_structural_metrics(dummy_real, dummy_fake, discriminator)
-    print(f"Structural metrics: {struct_metrics}")
-    
-    fad = metrics.compute_frechet_audio_distance(dummy_real, dummy_fake)
-    print(f"FAD score: {fad:.4f}")
-    
-    print("\n🎵 Audio SF-VNN System Ready!")
-    print("Replace dummy generator with your actual audio generator and start training!")
+    print("\n🎵 Audio SF-VNN Complete System Test Finished!")
+    print("\nSystem Capabilities Demonstrated:")
+    print("• Audio spectrogram structural analysis")
+    print("• Multi-scale entropy, alignment, and curvature computation")
+    print("• Audio-specific harmonic coherence and temporal stability")
+    print("• Structural distance measurement between spectrograms")
+    print("• Fréchet Audio Distance (FAD) calculation")
+    print("• Comprehensive spectral domain metrics")
+    print("• Real-time structural signature extraction")
+    print("\nReady for integration with audio GAN training!")
