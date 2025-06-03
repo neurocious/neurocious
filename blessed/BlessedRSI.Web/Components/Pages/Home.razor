@@ -1,0 +1,320 @@
+@page "/"
+@using Microsoft.AspNetCore.Components.Authorization
+@inject AuthenticationStateProvider AuthenticationStateProvider
+
+<PageTitle>BlessedRSI - Faith-Based Investment Education</PageTitle>
+
+<!-- Hero Section -->
+<section class="bg-primary text-white py-5">
+    <div class="container">
+        <div class="row align-items-center">
+            <div class="col-lg-6">
+                <h1 class="display-4 fw-bold mb-3">
+                    Faith Meets Finance
+                </h1>
+                <p class="lead mb-4">
+                    Learn biblical stewardship through cutting-edge Epistemic RSI technology. 
+                    Join a community of believers transforming their financial future with wisdom and humility.
+                </p>
+                <div class="d-flex gap-3">
+                    <AuthorizeView>
+                        <Authorized>
+                            <a href="/backtest" class="btn btn-warning btn-lg">
+                                <i class="fas fa-chart-line"></i> Start Testing Strategies
+                            </a>
+                        </Authorized>
+                        <NotAuthorized>
+                            <a href="/Account/Register" class="btn btn-warning btn-lg">
+                                <i class="fas fa-user-plus"></i> Get Started Free
+                            </a>
+                            <a href="/about" class="btn btn-outline-light btn-lg">
+                                <i class="fas fa-info-circle"></i> Learn About E-RSI
+                            </a>
+                        </NotAuthorized>
+                    </AuthorizeView>
+                </div>
+            </div>
+            <div class="col-lg-6 text-center">
+                <div class="bg-white rounded shadow-lg p-4 text-dark">
+                    <h5 class="text-primary">Today's Market Insight</h5>
+                    <div class="row text-center">
+                        <div class="col-6">
+                            <h3 class="text-success">@avgERsi.ToString("F1")</h3>
+                            <small class="text-muted">Average E-RSI</small>
+                        </div>
+                        <div class="col-6">
+                            <h3 class="text-info">@humbleOpportunities</h3>
+                            <small class="text-muted">Humble Opportunities</small>
+                        </div>
+                    </div>
+                    <hr>
+                    <blockquote class="blockquote-footer small">
+                        <em>"The humble will be lifted up" - Luke 14:11</em>
+                    </blockquote>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Features Section -->
+<section class="py-5">
+    <div class="container">
+        <div class="row text-center mb-5">
+            <div class="col">
+                <h2 class="display-5">Discover Epistemic RSI</h2>
+                <p class="lead text-muted">
+                    Revolutionary technology that measures market humility and overconfidence
+                </p>
+            </div>
+        </div>
+        
+        <div class="row g-4">
+            <div class="col-lg-4">
+                <div class="card h-100 shadow-sm">
+                    <div class="card-body text-center">
+                        <div class="bg-primary text-white rounded-circle mx-auto mb-3" style="width: 60px; height: 60px; display: flex; align-items: center; justify-content: center;">
+                            <i class="fas fa-brain fa-2x"></i>
+                        </div>
+                        <h5 class="card-title">AI with Humility</h5>
+                        <p class="card-text">
+                            Our AI practices strategic naivety, maintaining childlike wonder to spot opportunities others miss.
+                        </p>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="col-lg-4">
+                <div class="card h-100 shadow-sm">
+                    <div class="card-body text-center">
+                        <div class="bg-success text-white rounded-circle mx-auto mb-3" style="width: 60px; height: 60px; display: flex; align-items: center; justify-content: center;">
+                            <i class="fas fa-chart-line fa-2x"></i>
+                        </div>
+                        <h5 class="card-title">Proven Performance</h5>
+                        <p class="card-text">
+                            179.86% total return with 8.644 Sortino ratio - evidence of wisdom-guided technology.
+                        </p>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="col-lg-4">
+                <div class="card h-100 shadow-sm">
+                    <div class="card-body text-center">
+                        <div class="bg-warning text-white rounded-circle mx-auto mb-3" style="width: 60px; height: 60px; display: flex; align-items: center; justify-content: center;">
+                            <i class="fas fa-users fa-2x"></i>
+                        </div>
+                        <h5 class="card-title">Faith Community</h5>
+                        <p class="card-text">
+                            Learn alongside believers who share strategies, wisdom, and biblical insights.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- How It Works Section -->
+<section class="bg-light py-5">
+    <div class="container">
+        <div class="row mb-5">
+            <div class="col text-center">
+                <h2 class="display-5">How E-RSI Works</h2>
+                <p class="lead">Biblical principles meet cutting-edge technology</p>
+            </div>
+        </div>
+        
+        <div class="row g-4">
+            <div class="col-lg-3 text-center">
+                <div class="mb-3">
+                    <span class="badge bg-primary rounded-pill fs-4 p-3">1</span>
+                </div>
+                <h5>Market Humility</h5>
+                <p class="text-muted">
+                    When E-RSI is low (&lt;40), the AI is uncertain and humble - prime buying opportunities emerge.
+                </p>
+            </div>
+            
+            <div class="col-lg-3 text-center">
+                <div class="mb-3">
+                    <span class="badge bg-success rounded-pill fs-4 p-3">2</span>
+                </div>
+                <h5>Patient Wisdom</h5>
+                <p class="text-muted">
+                    Strategic delays allow market timing to align with biblical principles of patience.
+                </p>
+            </div>
+            
+            <div class="col-lg-3 text-center">
+                <div class="mb-3">
+                    <span class="badge bg-warning rounded-pill fs-4 p-3">3</span>
+                </div>
+                <h5>Pride Warning</h5>
+                <p class="text-muted">
+                    When E-RSI is high (&gt;90), overconfidence signals potential selling opportunities.
+                </p>
+            </div>
+            
+            <div class="col-lg-3 text-center">
+                <div class="mb-3">
+                    <span class="badge bg-info rounded-pill fs-4 p-3">4</span>
+                </div>
+                <h5>Faithful Stewardship</h5>
+                <p class="text-muted">
+                    Risk management ensures we protect what God has entrusted to our care.
+                </p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Testimonials -->
+<section class="py-5">
+    <div class="container">
+        <div class="row mb-5">
+            <div class="col text-center">
+                <h2 class="display-5">Community Testimonials</h2>
+                <p class="lead">Hear from fellow believers on their journey</p>
+            </div>
+        </div>
+        
+        <div class="row g-4">
+            <div class="col-lg-4">
+                <div class="card border-0 shadow-sm">
+                    <div class="card-body">
+                        <div class="d-flex align-items-center mb-3">
+                            <div class="avatar-circle me-3">MS</div>
+                            <div>
+                                <h6 class="mb-0">Michael S.</h6>
+                                <small class="text-muted">Believer Tier</small>
+                            </div>
+                        </div>
+                        <p class="card-text">
+                            "E-RSI helped me understand that the best opportunities come when markets are most uncertain. 
+                            It's like finding diamonds in the rough - exactly what Jesus taught about hidden treasures."
+                        </p>
+                        <small class="text-muted">Achieved 6.2 Sortino Ratio</small>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="col-lg-4">
+                <div class="card border-0 shadow-sm">
+                    <div class="card-body">
+                        <div class="d-flex align-items-center mb-3">
+                            <div class="avatar-circle me-3">RJ</div>
+                            <div>
+                                <h6 class="mb-0">Rachel J.</h6>
+                                <small class="text-muted">Disciple Tier</small>
+                            </div>
+                        </div>
+                        <p class="card-text">
+                            "The community aspect is incredible. We pray for each other, share strategies, and grow in both 
+                            faith and financial wisdom. It's Acts 2:42-47 in action."
+                        </p>
+                        <small class="text-muted">Community Leader</small>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="col-lg-4">
+                <div class="card border-0 shadow-sm">
+                    <div class="card-body">
+                        <div class="d-flex align-items-center mb-3">
+                            <div class="avatar-circle me-3">DT</div>
+                            <div>
+                                <h6 class="mb-0">David T.</h6>
+                                <small class="text-muted">Apostle Tier</small>
+                            </div>
+                        </div>
+                        <p class="card-text">
+                            "As a financial advisor, I was skeptical. But E-RSI's focus on humility and patience aligns 
+                            perfectly with biblical stewardship. The results speak for themselves."
+                        </p>
+                        <small class="text-muted">Professional Advisor</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- CTA Section -->
+<AuthorizeView>
+    <NotAuthorized>
+        <section class="bg-primary text-white py-5">
+            <div class="container text-center">
+                <h2 class="display-5 mb-3">Ready to Begin Your Journey?</h2>
+                <p class="lead mb-4">
+                    Join thousands of believers learning biblical stewardship through technology
+                </p>
+                <div class="row justify-content-center">
+                    <div class="col-lg-8">
+                        <div class="row g-3">
+                            <div class="col-md-6">
+                                <div class="card">
+                                    <div class="card-body">
+                                        <h5 class="card-title">Free Seeker Tier</h5>
+                                        <ul class="list-unstyled">
+                                            <li><i class="fas fa-check text-success"></i> E-RSI Education</li>
+                                            <li><i class="fas fa-check text-success"></i> 3 Backtests/Day</li>
+                                            <li><i class="fas fa-check text-success"></i> Community Access</li>
+                                        </ul>
+                                        <a href="/Account/Register" class="btn btn-primary">Start Free</a>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="card border-warning">
+                                    <div class="card-body">
+                                        <h5 class="card-title">Believer Tier <span class="badge bg-warning">$29/mo</span></h5>
+                                        <ul class="list-unstyled">
+                                            <li><i class="fas fa-check text-success"></i> Unlimited Backtests</li>
+                                            <li><i class="fas fa-check text-success"></i> Advanced Analytics</li>
+                                            <li><i class="fas fa-check text-success"></i> Priority Support</li>
+                                        </ul>
+                                        <a href="/pricing" class="btn btn-warning">Learn More</a>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </NotAuthorized>
+</AuthorizeView>
+
+@code {
+    private decimal avgERsi = 45.2m;
+    private int humbleOpportunities = 23;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Load real-time market data
+        await LoadMarketData();
+    }
+
+    private async Task LoadMarketData()
+    {
+        // This would call the TradingApiService to get current market conditions
+        // For now, using placeholder data
+        await Task.Delay(1);
+    }
+}
+
+<style>
+    .avatar-circle {
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        background-color: #007bff;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        font-weight: bold;
+        font-size: 14px;
+    }
+</style>

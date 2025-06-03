@@ -1,0 +1,284 @@
+@page "/dashboard"
+@using Microsoft.AspNetCore.Authorization
+@using BlessedRSI.Web.Models
+@using BlessedRSI.Web.Services
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@inject BacktestService BacktestService
+@inject CommunityService CommunityService
+@attribute [Authorize]
+
+<PageTitle>Dashboard - BlessedRSI</PageTitle>
+
+<div class="container-fluid">
+    <!-- Welcome Header -->
+    <div class="row mb-4">
+        <div class="col">
+            <div class="d-flex justify-content-between align-items-center">
+                <div>
+                    <h2 class="text-primary">
+                        <i class="fas fa-tachometer-alt"></i> 
+                        Welcome back, @userFirstName!
+                    </h2>
+                    <p class="text-muted mb-0">Ready to practice faithful stewardship?</p>
+                </div>
+                <div class="text-end">
+                    <span class="badge @GetSubscriptionBadgeClass() fs-6 px-3 py-2">
+                        @currentTier Tier
+                    </span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Daily Verse -->
+    <div class="row mb-4">
+        <div class="col">
+            <div class="card border-primary">
+                <div class="card-body bg-primary bg-gradient text-white">
+                    <div class="d-flex align-items-center">
+                        <i class="fas fa-bible fa-2x me-3 opacity-75"></i>
+                        <div>
+                            <h6 class="mb-1">Today's Verse</h6>
+                            <blockquote class="mb-0">
+                                <em>"The plans of the diligent lead to profit as surely as haste leads to poverty."</em>
+                                <small class="d-block opacity-75">- Proverbs 21:5</small>
+                            </blockquote>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Key Metrics -->
+    <div class="row mb-4">
+        <div class="col-md-3">
+            <div class="card text-center h-100">
+                <div class="card-body">
+                    <i class="fas fa-chart-line fa-2x text-primary mb-2"></i>
+                    <h4 class="text-primary">@userStats.TotalBacktests</h4>
+                    <small class="text-muted">Strategies Tested</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card text-center h-100">
+                <div class="card-body">
+                    <i class="fas fa-medal fa-2x text-success mb-2"></i>
+                    <h4 class="text-success">@userStats.BestSortino.ToString("F2")</h4>
+                    <small class="text-muted">Best Sortino Ratio</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card text-center h-100">
+                <div class="card-body">
+                    <i class="fas fa-heart fa-2x text-warning mb-2"></i>
+                    <h4 class="text-warning">@userStats.CommunityPoints</h4>
+                    <small class="text-muted">Community Points</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card text-center h-100">
+                <div class="card-body">
+                    <i class="fas fa-calendar fa-2x text-info mb-2"></i>
+                    <h4 class="text-info">@daysSinceJoined</h4>
+                    <small class="text-muted">Days in Fellowship</small>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <!-- Quick Actions -->
+        <div class="col-lg-4 mb-4">
+            <div class="card h-100">
+                <div class="card-header bg-primary text-white">
+                    <h6 class="mb-0"><i class="fas fa-rocket"></i> Quick Actions</h6>
+                </div>
+                <div class="card-body">
+                    <div class="d-grid gap-3">
+                        <a href="/backtest" class="btn btn-outline-primary">
+                            <i class="fas fa-chart-line"></i> Test New Strategy
+                        </a>
+                        <a href="/community" class="btn btn-outline-success">
+                            <i class="fas fa-users"></i> Join Discussion
+                        </a>
+                        <a href="/leaderboard" class="btn btn-outline-warning">
+                            <i class="fas fa-trophy"></i> View Leaderboard
+                        </a>
+                        @if (currentTier == SubscriptionTier.Seeker)
+                        {
+                            <a href="/subscription" class="btn btn-warning">
+                                <i class="fas fa-crown"></i> Upgrade Plan
+                            </a>
+                        }
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Recent Activity -->
+        <div class="col-lg-8 mb-4">
+            <div class="card h-100">
+                <div class="card-header bg-success text-white">
+                    <h6 class="mb-0"><i class="fas fa-history"></i> Recent Activity</h6>
+                </div>
+                <div class="card-body">
+                    @if (recentBacktests.Any())
+                    {
+                        <div class="table-responsive">
+                            <table class="table table-sm">
+                                <thead>
+                                    <tr>
+                                        <th>Strategy</th>
+                                        <th>Date</th>
+                                        <th>Return</th>
+                                        <th>Sortino</th>
+                                        <th>Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var backtest in recentBacktests.Take(5))
+                                    {
+                                        <tr>
+                                            <td>
+                                                @if (!string.IsNullOrEmpty(backtest.StrategyName))
+                                                {
+                                                    <span class="badge bg-primary">@backtest.StrategyName</span>
+                                                }
+                                                else
+                                                {
+                                                    <span class="text-muted">Unnamed</span>
+                                                }
+                                            </td>
+                                            <td>@backtest.CreatedAt.ToString("MMM dd")</td>
+                                            <td class="@(backtest.TotalReturn > 0 ? "text-success" : "text-danger")">
+                                                @backtest.TotalReturn.ToString("P1")
+                                            </td>
+                                            <td class="fw-bold">@backtest.SortinoRatio.ToString("F2")</td>
+                                            <td>
+                                                <button class="btn btn-sm btn-outline-primary">
+                                                    <i class="fas fa-eye"></i>
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="text-center py-4">
+                            <i class="fas fa-chart-line fa-3x text-muted mb-3"></i>
+                            <h6 class="text-muted">No strategies tested yet</h6>
+                            <p class="text-muted">Start your journey with your first backtest!</p>
+                            <a href="/backtest" class="btn btn-primary">
+                                <i class="fas fa-play"></i> Test Your First Strategy
+                            </a>
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Subscription Status -->
+    @if (currentTier != SubscriptionTier.Seeker)
+    {
+        <div class="row">
+            <div class="col">
+                <div class="card border-success">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <h6 class="text-success mb-1">
+                                    <i class="fas fa-check-circle"></i> Active Subscription
+                                </h6>
+                                <p class="mb-0">
+                                    Your @currentTier subscription is active
+                                    @if (subscriptionExpires.HasValue)
+                                    {
+                                        <span class="text-muted">until @subscriptionExpires.Value.ToString("MMMM dd, yyyy")</span>
+                                    }
+                                </p>
+                            </div>
+                            <a href="/subscription" class="btn btn-outline-success">
+                                <i class="fas fa-cog"></i> Manage
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private string userFirstName = "";
+    private SubscriptionTier currentTier = SubscriptionTier.Seeker;
+    private DateTime? subscriptionExpires;
+    private int daysSinceJoined = 0;
+    private UserStats userStats = new();
+    private List<BacktestResult> recentBacktests = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadUserData();
+        await LoadRecentActivity();
+    }
+
+    private async Task LoadUserData()
+    {
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        if (authState.User.Identity?.IsAuthenticated == true)
+        {
+            userFirstName = authState.User.FindFirst("first_name")?.Value ?? "Friend";
+            
+            if (Enum.TryParse<SubscriptionTier>(authState.User.FindFirst("subscription_tier")?.Value, out var tier))
+            {
+                currentTier = tier;
+            }
+
+            if (DateTime.TryParse(authState.User.FindFirst("subscription_expires")?.Value, out var expires))
+            {
+                subscriptionExpires = expires;
+            }
+
+            userStats.CommunityPoints = int.TryParse(authState.User.FindFirst("community_points")?.Value, out var points) ? points : 0;
+            userStats.TotalBacktests = int.TryParse(authState.User.FindFirst("total_backtests")?.Value, out var backtests) ? backtests : 0;
+            userStats.BestSortino = decimal.TryParse(authState.User.FindFirst("best_sortino")?.Value, out var sortino) ? sortino : 0;
+
+            // Calculate days since joining (this would come from user creation date in real implementation)
+            daysSinceJoined = 42; // Placeholder
+        }
+    }
+
+    private async Task LoadRecentActivity()
+    {
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        if (authState.User.Identity?.IsAuthenticated == true)
+        {
+            var userId = authState.User.FindFirst("sub")?.Value ?? "";
+            recentBacktests = await BacktestService.GetUserBacktestsAsync(userId, 5);
+        }
+    }
+
+    private string GetSubscriptionBadgeClass() => currentTier switch
+    {
+        SubscriptionTier.Seeker => "bg-secondary",
+        SubscriptionTier.Believer => "bg-primary",
+        SubscriptionTier.Disciple => "bg-success",
+        SubscriptionTier.Apostle => "bg-warning text-dark",
+        _ => "bg-secondary"
+    };
+
+    private class UserStats
+    {
+        public int TotalBacktests { get; set; }
+        public decimal BestSortino { get; set; }
+        public int CommunityPoints { get; set; }
+    }
+}

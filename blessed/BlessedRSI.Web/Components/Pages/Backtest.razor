@@ -1,0 +1,255 @@
+@page "/backtest"
+@using BlessedRSI.Web.Models
+@using BlessedRSI.Web.Services
+@using Microsoft.AspNetCore.Authorization
+@inject BacktestService BacktestService
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@inject IJSRuntime JSRuntime
+@inject NavigationManager Navigation
+@attribute [Authorize]
+
+<PageTitle>Strategy Tester - BlessedRSI</PageTitle>
+
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-12">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <h2><i class="fas fa-chart-line text-primary"></i> E-RSI Strategy Tester</h2>
+                <div class="text-muted">
+                    <i class="fas fa-bible"></i>
+                    <em>"The plans of the diligent lead to profit" - Proverbs 21:5</em>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <!-- Parameter Panel -->
+        <div class="col-lg-4">
+            <div class="card shadow-sm">
+                <div class="card-header bg-primary text-white">
+                    <h5 class="mb-0"><i class="fas fa-sliders-h"></i> Strategy Parameters</h5>
+                </div>
+                <div class="card-body">
+                    <EditForm Model="parameters" OnValidSubmit="RunBacktest">
+                        <DataAnnotationsValidator />
+                        
+                        <!-- Core E-RSI Parameters -->
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">
+                                <i class="fas fa-arrow-down text-success"></i> Buy Threshold (E-RSI)
+                                <span class="badge bg-info ms-2">Humility Level</span>
+                            </label>
+                            <InputNumber @bind-Value="parameters.BuyThreshold" class="form-control" />
+                            <div class="form-text">
+                                Buy when market uncertainty is high (lower = more humble)
+                            </div>
+                            <ValidationMessage For="() => parameters.BuyThreshold" />
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">
+                                <i class="fas fa-arrow-up text-danger"></i> Sell Trigger (E-RSI)
+                                <span class="badge bg-warning ms-2">Pride Warning</span>
+                            </label>
+                            <InputNumber @bind-Value="parameters.SellTrigger" class="form-control" />
+                            <div class="form-text">
+                                Mark for sale when market overconfidence peaks
+                            </div>
+                            <ValidationMessage For="() => parameters.SellTrigger" />
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">
+                                <i class="fas fa-clock text-primary"></i> Patience Period (Weeks)
+                                <span class="badge bg-secondary ms-2">Wisdom Timing</span>
+                            </label>
+                            <InputNumber @bind-Value="parameters.SellDelayWeeks" class="form-control" />
+                            <div class="form-text">
+                                Wait time after sell trigger (patience in execution)
+                            </div>
+                            <ValidationMessage For="() => parameters.SellDelayWeeks" />
+                        </div>
+
+                        <!-- Risk Management -->
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">
+                                <i class="fas fa-balance-scale text-info"></i> Position Size (%)
+                                <span class="badge bg-success ms-2">Stewardship</span>
+                            </label>
+                            <InputNumber @bind-Value="parameters.PositionSizePct" step="0.01" class="form-control" />
+                            <div class="form-text">
+                                Percentage of portfolio per trade (wise stewardship)
+                            </div>
+                            <ValidationMessage For="() => parameters.PositionSizePct" />
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">
+                                <i class="fas fa-shield-alt text-warning"></i> Stop Loss (%)
+                                <span class="badge bg-danger ms-2">Protection</span>
+                            </label>
+                            <InputNumber @bind-Value="parameters.StopLossPct" step="0.01" class="form-control" />
+                            <div class="form-text">
+                                Maximum loss before protective exit
+                            </div>
+                            <ValidationMessage For="() => parameters.StopLossPct" />
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">
+                                <i class="fas fa-dollar-sign text-success"></i> Starting Capital
+                            </label>
+                            <InputNumber @bind-Value="parameters.StartingCapital" class="form-control" />
+                            <ValidationMessage For="() => parameters.StartingCapital" />
+                        </div>
+
+                        <!-- Strategy Naming -->
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">
+                                <i class="fas fa-tag text-primary"></i> Strategy Name (Optional)
+                            </label>
+                            <InputText @bind-Value="strategyName" class="form-control" 
+                                      placeholder="e.g., David's Courage, Solomon's Patience" />
+                            <div class="form-text">
+                                Give your strategy a biblical name to share with the community
+                            </div>
+                        </div>
+
+                        <div class="d-grid">
+                            <button type="submit" class="btn btn-primary btn-lg" disabled="@isRunning">
+                                @if (isRunning)
+                                {
+                                    <i class="fas fa-spinner fa-spin"></i> Testing Strategy...
+                                }
+                                else
+                                {
+                                    <i class="fas fa-play"></i> Test Strategy
+                                }
+                            </button>
+                        </div>
+                    </EditForm>
+                </div>
+            </div>
+        </div>
+
+        <!-- Results Panel -->
+        <div class="col-lg-8">
+            @if (currentResult != null)
+            {
+                <div class="card shadow-sm">
+                    <div class="card-header bg-success text-white">
+                        <h5 class="mb-0">
+                            <i class="fas fa-chart-bar"></i> Backtest Results
+                            @if (!string.IsNullOrEmpty(strategyName))
+                            {
+                                <span class="badge bg-light text-dark ms-2">@strategyName</span>
+                            }
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        <!-- Key Metrics Row -->
+                        <div class="row text-center mb-4">
+                            <div class="col-md-3">
+                                <div class="bg-primary text-white rounded p-3">
+                                    <h3 class="mb-1">@currentResult.TotalReturn.ToString("P2")</h3>
+                                    <small>Total Return</small>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="bg-success text-white rounded p-3">
+                                    <h3 class="mb-1">@currentResult.SortinoRatio.ToString("F2")</h3>
+                                    <small>Sortino Ratio</small>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="bg-info text-white rounded p-3">
+                                    <h3 class="mb-1">@currentResult.WinRate.ToString("P1")</h3>
+                                    <small>Win Rate</small>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="bg-warning text-white rounded p-3">
+                                    <h3 class="mb-1">@currentResult.TotalTrades</h3>
+                                    <small>Total Trades</small>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Spiritual Reflection -->
+                        <div class="alert alert-light border-primary">
+                            <h6 class="text-primary"><i class="fas fa-praying-hands"></i> Reflection</h6>
+                            @if (currentResult.SortinoRatio > 5.0m)
+                            {
+                                <p class="mb-1"><strong>Exceptional stewardship!</strong> Your strategy demonstrates the wisdom found in patient, humble investing.</p>
+                                <small class="text-muted"><em>"Commit to the Lord whatever you do, and he will establish your plans." - Proverbs 16:3</em></small>
+                            }
+                            else if (currentResult.SortinoRatio > 2.0m)
+                            {
+                                <p class="mb-1"><strong>Good stewardship.</strong> Continue refining your approach with patience and wisdom.</p>
+                                <small class="text-muted"><em>"The simple believe anything, but the prudent give thought to their steps." - Proverbs 14:15</em></small>
+                            }
+                            else
+                            {
+                                <p class="mb-1"><strong>Learning opportunity.</strong> Consider adjusting parameters and practicing patience.</p>
+                                <small class="text-muted"><em>"Plans fail for lack of counsel, but with many advisers they succeed." - Proverbs 15:22</em></small>
+                            }
+                        </div>
+                    </div>
+                </div>
+            }
+            else if (!hasRunTest)
+            {
+                <!-- Welcome Message -->
+                <div class="card shadow-sm">
+                    <div class="card-body text-center py-5">
+                        <i class="fas fa-chart-line fa-3x text-muted mb-3"></i>
+                        <h4 class="text-muted">Welcome to E-RSI Strategy Testing</h4>
+                        <p class="text-muted mb-4">
+                            Adjust the parameters on the left and click "Test Strategy" to see how your approach would have performed.
+                        </p>
+                        <div class="alert alert-info">
+                            <h6><i class="fas fa-lightbulb"></i> Getting Started Tips</h6>
+                            <ul class="text-start mb-0">
+                                <li><strong>Lower Buy Threshold (20-40):</strong> More humble, catches oversold opportunities</li>
+                                <li><strong>Higher Sell Trigger (80-95):</strong> Waits for overconfidence peaks</li>
+                                <li><strong>Patience Period (3-6 weeks):</strong> Allows time for market wisdom</li>
+                                <li><strong>Position Size (15-30%):</strong> Balanced stewardship approach</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    private BacktestParameters parameters = new();
+    private BacktestResult? currentResult;
+    private string strategyName = "";
+    private bool isRunning = false;
+    private bool hasRunTest = false;
+
+    private async Task RunBacktest()
+    {
+        isRunning = true;
+        hasRunTest = true;
+
+        try
+        {
+            var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+            var userId = authState.User.FindFirst("sub")?.Value ?? "";
+
+            currentResult = await BacktestService.RunAndSaveBacktestAsync(parameters, userId, strategyName);
+        }
+        catch (Exception ex)
+        {
+            await JSRuntime.InvokeVoidAsync("alert", $"Error: {ex.Message}");
+        }
+        finally
+        {
+            isRunning = false;
+        }
+    }
+}

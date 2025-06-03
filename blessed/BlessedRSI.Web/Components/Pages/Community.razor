@@ -1,0 +1,281 @@
+@page "/community"
+@using BlessedRSI.Web.Models
+@using BlessedRSI.Web.Services
+@using Microsoft.AspNetCore.Authorization
+@inject CommunityService CommunityService
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@inject NavigationManager Navigation
+@inject IJSRuntime JSRuntime
+@attribute [Authorize]
+
+<PageTitle>Community Fellowship - BlessedRSI</PageTitle>
+
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-12">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <h2><i class="fas fa-users text-primary"></i> Community Fellowship</h2>
+                <div class="text-muted">
+                    <i class="fas fa-bible"></i>
+                    <em>"As iron sharpens iron, so one person sharpens another." - Proverbs 27:17</em>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <!-- Main Content -->
+        <div class="col-lg-8">
+            <!-- Post Creation -->
+            <div class="card shadow-sm mb-4">
+                <div class="card-header bg-primary text-white">
+                    <h6 class="mb-0"><i class="fas fa-edit"></i> Share with the Community</h6>
+                </div>
+                <div class="card-body">
+                    <EditForm Model="newPost" OnValidSubmit="CreatePost">
+                        <DataAnnotationsValidator />
+                        
+                        <div class="mb-3">
+                            <label class="form-label">Post Type</label>
+                            <InputSelect @bind-Value="newPost.Type" class="form-select">
+                                <option value="@PostType.Discussion">Discussion</option>
+                                <option value="@PostType.Question">Question</option>
+                                <option value="@PostType.MarketInsight">Market Insight</option>
+                                <option value="@PostType.BiblicalReflection">Biblical Reflection</option>
+                                <option value="@PostType.PrayerRequest">Prayer Request</option>
+                                <option value="@PostType.Testimony">Testimony</option>
+                            </InputSelect>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Title</label>
+                            <InputText @bind-Value="newPost.Title" class="form-control" 
+                                      placeholder="What would you like to share?" />
+                            <ValidationMessage For="() => newPost.Title" />
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Content</label>
+                            <InputTextArea @bind-Value="newPost.Content" class="form-control" rows="4"
+                                          placeholder="Share your thoughts, insights, or questions..." />
+                            <ValidationMessage For="() => newPost.Content" />
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Related Scripture (Optional)</label>
+                            <InputText @bind-Value="newPost.RelatedVerse" class="form-control" 
+                                      placeholder="e.g., Proverbs 21:5 - The plans of the diligent lead to profit" />
+                        </div>
+
+                        <div class="d-flex justify-content-between">
+                            <small class="text-muted align-self-center">
+                                <i class="fas fa-heart text-danger"></i> 
+                                Remember to encourage and build up one another
+                            </small>
+                            <button type="submit" class="btn btn-primary" disabled="@isSubmitting">
+                                @if (isSubmitting)
+                                {
+                                    <i class="fas fa-spinner fa-spin"></i> Posting...
+                                }
+                                else
+                                {
+                                    <i class="fas fa-paper-plane"></i> Share Post
+                                }
+                            </button>
+                        </div>
+                    </EditForm>
+                </div>
+            </div>
+
+            <!-- Posts Feed -->
+            @if (posts.Any())
+            {
+                @foreach (var post in posts)
+                {
+                    <div class="card shadow-sm mb-3 post-card">
+                        <div class="card-body">
+                            <div class="d-flex justify-content-between align-items-start mb-2">
+                                <div class="d-flex align-items-center">
+                                    <div class="avatar-circle me-3">
+                                        @GetUserInitials(post.User?.FirstName + " " + post.User?.LastName)
+                                    </div>
+                                    <div>
+                                        <h6 class="mb-0">@post.User?.FirstName @post.User?.LastName</h6>
+                                        <small class="text-muted">
+                                            @post.CreatedAt.ToString("MMM dd, yyyy 'at' h:mm tt")
+                                            <span class="badge @GetPostTypeBadgeClass(post.Type) ms-2">
+                                                @GetPostTypeDisplay(post.Type)
+                                            </span>
+                                        </small>
+                                    </div>
+                                </div>
+                                @if (post.IsPinned)
+                                {
+                                    <i class="fas fa-thumbtack text-warning" title="Pinned Post"></i>
+                                }
+                            </div>
+
+                            <h5 class="card-title">@post.Title</h5>
+                            <p class="card-text">@post.Content</p>
+
+                            @if (!string.IsNullOrEmpty(post.RelatedVerse))
+                            {
+                                <blockquote class="blockquote-footer">
+                                    <i class="fas fa-bible text-primary"></i>
+                                    <em>@post.RelatedVerse</em>
+                                </blockquote>
+                            }
+
+                            <div class="d-flex justify-content-between align-items-center mt-3">
+                                <div class="d-flex gap-3">
+                                    <button class="btn btn-sm btn-outline-primary" @onclick="() => ToggleLike(post)">
+                                        <i class="fas fa-heart"></i>
+                                        @post.Likes
+                                    </button>
+                                    <button class="btn btn-sm btn-outline-secondary">
+                                        <i class="fas fa-comment"></i>
+                                        @post.Comments.Count
+                                    </button>
+                                    <span class="text-muted small align-self-center">
+                                        <i class="fas fa-eye"></i> @post.Views views
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                }
+            }
+            else
+            {
+                <div class="card shadow-sm">
+                    <div class="card-body text-center py-5">
+                        <i class="fas fa-comments fa-3x text-muted mb-3"></i>
+                        <h5 class="text-muted">No posts yet</h5>
+                        <p class="text-muted">Be the first to share something with the community!</p>
+                    </div>
+                </div>
+            }
+        </div>
+
+        <!-- Sidebar -->
+        <div class="col-lg-4">
+            <!-- Daily Devotional -->
+            <div class="card shadow-sm mb-4">
+                <div class="card-header bg-success text-white">
+                    <h6 class="mb-0"><i class="fas fa-bible"></i> Today's Devotional</h6>
+                </div>
+                <div class="card-body">
+                    <h6 class="text-primary">Faithful Stewardship</h6>
+                    <blockquote class="blockquote">
+                        <p class="mb-2">
+                            <em>"Whoever is faithful in very little is also faithful in much."</em>
+                        </p>
+                        <footer class="blockquote-footer">Luke 16:10</footer>
+                    </blockquote>
+                    <p class="small">
+                        Today, remember that how we handle small investments reflects our character 
+                        in larger matters.
+                    </p>
+                </div>
+            </div>
+
+            <!-- Community Guidelines -->
+            <div class="card shadow-sm">
+                <div class="card-header bg-info text-white">
+                    <h6 class="mb-0"><i class="fas fa-heart"></i> Community Guidelines</h6>
+                </div>
+                <div class="card-body">
+                    <ul class="list-unstyled mb-0">
+                        <li class="mb-2">
+                            <i class="fas fa-check text-success"></i>
+                            <strong>Encourage one another</strong> in faith and investing
+                        </li>
+                        <li class="mb-2">
+                            <i class="fas fa-check text-success"></i>
+                            <strong>Share knowledge</strong> freely and humbly
+                        </li>
+                        <li class="mb-2">
+                            <i class="fas fa-times text-danger"></i>
+                            <strong>No financial advice</strong> - share experiences only
+                        </li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private CommunityPost newPost = new();
+    private List<CommunityPost> posts = new();
+    private bool isSubmitting = false;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadPosts();
+    }
+
+    private async Task LoadPosts()
+    {
+        posts = await CommunityService.GetRecentPostsAsync();
+    }
+
+    private async Task CreatePost()
+    {
+        isSubmitting = true;
+        try
+        {
+            var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+            var userId = authState.User.FindFirst("sub")?.Value ?? "";
+
+            newPost.UserId = userId;
+            var createdPost = await CommunityService.CreatePostAsync(newPost);
+            
+            if (createdPost != null)
+            {
+                posts.Insert(0, createdPost);
+                newPost = new CommunityPost();
+            }
+        }
+        finally
+        {
+            isSubmitting = false;
+        }
+    }
+
+    private async Task ToggleLike(CommunityPost post)
+    {
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        var userId = authState.User.FindFirst("sub")?.Value ?? "";
+        
+        var liked = await CommunityService.ToggleLikeAsync(post.Id, userId);
+        post.Likes += liked ? 1 : -1;
+    }
+
+    private string GetPostTypeBadgeClass(PostType type) => type switch
+    {
+        PostType.PrayerRequest => "bg-warning",
+        PostType.Testimony => "bg-success",
+        PostType.MarketInsight => "bg-info",
+        PostType.BiblicalReflection => "bg-primary",
+        PostType.Question => "bg-secondary",
+        _ => "bg-light text-dark"
+    };
+
+    private string GetPostTypeDisplay(PostType type) => type switch
+    {
+        PostType.PrayerRequest => "Prayer",
+        PostType.BiblicalReflection => "Scripture",
+        PostType.MarketInsight => "Insight",
+        _ => type.ToString()
+    };
+
+    private string GetUserInitials(string name)
+    {
+        if (string.IsNullOrEmpty(name)) return "?";
+        var parts = name.Split(' ');
+        return parts.Length > 1 
+            ? $"{parts[0][0]}{parts[1][0]}" 
+            : name.Substring(0, Math.Min(2, name.Length));
+    }
+}

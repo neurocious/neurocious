@@ -1,0 +1,778 @@
+@page "/security/two-factor"
+@using BlessedRSI.Web.Models
+@using Microsoft.AspNetCore.Authorization
+@using System.Text.Json
+@inject IJSRuntime JSRuntime
+@inject NavigationManager Navigation
+@attribute [Authorize]
+
+<PageTitle>Two-Factor Authentication - BlessedRSI</PageTitle>
+
+<div class="container">
+    <div class="row justify-content-center">
+        <div class="col-lg-8">
+            <!-- Header -->
+            <div class="card shadow-lg border-0 mb-4">
+                <div class="card-header bg-primary text-white py-4">
+                    <div class="text-center">
+                        <h3 class="mb-2">
+                            <i class="fas fa-shield-alt me-2"></i>
+                            Two-Factor Authentication
+                        </h3>
+                        <p class="mb-0 opacity-75">Enhance your account security with email verification</p>
+                    </div>
+                </div>
+                
+                <div class="card-body p-4">
+                    <!-- Biblical Verse -->
+                    <div class="text-center mb-4">
+                        <blockquote class="blockquote-footer small">
+                            <em>"Above all else, guard your heart, for everything you do flows from it."</em>
+                            <span class="text-muted">- Proverbs 4:23</span>
+                        </blockquote>
+                    </div>
+
+                    @if (currentStatus?.IsEnabled == true)
+                    {
+                        <!-- 2FA Enabled State -->
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="card border-success h-100">
+                                    <div class="card-body text-center">
+                                        <i class="fas fa-check-circle fa-3x text-success mb-3"></i>
+                                        <h5 class="text-success">2FA is Active</h5>
+                                        <p class="text-muted">Your account is protected with two-factor authentication</p>
+                                        
+                                        <div class="mt-3">
+                                            <small class="text-muted">
+                                                <strong>Enabled:</strong> @currentStatus.EnabledAt?.ToString("MMM dd, yyyy")
+                                            </small>
+                                        </div>
+                                        
+                                        <div class="mt-2">
+                                            <small class="text-muted">
+                                                <strong>Backup codes remaining:</strong> @currentStatus.BackupCodesRemaining
+                                            </small>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="card h-100">
+                                    <div class="card-body">
+                                        <h6 class="card-title">
+                                            <i class="fas fa-cog text-primary"></i> Manage 2FA
+                                        </h6>
+                                        
+                                        <div class="d-grid gap-2">
+                                            <button class="btn btn-outline-primary" @onclick="ShowBackupCodes">
+                                                <i class="fas fa-key"></i> Generate New Backup Codes
+                                            </button>
+                                            
+                                            <button class="btn btn-outline-warning" @onclick="ShowDisable2FA">
+                                                <i class="fas fa-shield-alt"></i> Disable 2FA
+                                            </button>
+                                        </div>
+                                        
+                                        <div class="mt-3">
+                                            <h6>Settings:</h6>
+                                            <ul class="list-unstyled small">
+                                                <li>
+                                                    <i class="fas fa-@(currentStatus.RequiredForLogin ? "check text-success" : "times text-muted")"></i>
+                                                    Required for login
+                                                </li>
+                                                <li>
+                                                    <i class="fas fa-@(currentStatus.RequiredForSensitiveActions ? "check text-success" : "times text-muted")"></i>
+                                                    Required for sensitive actions
+                                                </li>
+                                            </ul>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    }
+                    else
+                    {
+                        <!-- 2FA Setup State -->
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="card border-warning h-100">
+                                    <div class="card-body text-center">
+                                        <i class="fas fa-exclamation-triangle fa-3x text-warning mb-3"></i>
+                                        <h5 class="text-warning">2FA Not Enabled</h5>
+                                        <p class="text-muted">Your account relies only on password protection</p>
+                                        
+                                        <div class="alert alert-info small">
+                                            <strong>Why enable 2FA?</strong>
+                                            <ul class="text-start mb-0 mt-2">
+                                                <li>Prevents unauthorized access</li>
+                                                <li>Protects your investments</li>
+                                                <li>Industry best practice</li>
+                                                <li>Peace of mind</li>
+                                            </ul>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="card h-100">
+                                    <div class="card-body">
+                                        <h6 class="card-title">
+                                            <i class="fas fa-rocket text-success"></i> Enable 2FA
+                                        </h6>
+                                        
+                                        @if (!setupCodeSent)
+                                        {
+                                            <p class="text-muted">
+                                                Click below to send a verification code to your email and begin the setup process.
+                                            </p>
+                                            
+                                            <div class="d-grid">
+                                                <button class="btn btn-success btn-lg" @onclick="SendSetupCode" disabled="@isLoading">
+                                                    @if (isLoading)
+                                                    {
+                                                        <i class="fas fa-spinner fa-spin"></i> Sending...
+                                                    }
+                                                    else
+                                                    {
+                                                        <i class="fas fa-envelope"></i> Send Setup Code
+                                                    }
+                                                </button>
+                                            </div>
+                                        }
+                                        else
+                                        {
+                                            <div class="alert alert-success">
+                                                <i class="fas fa-envelope"></i>
+                                                Setup code sent to your email!
+                                            </div>
+                                            
+                                            <EditForm Model="enableRequest" OnValidSubmit="EnableTwoFactor">
+                                                <DataAnnotationsValidator />
+                                                
+                                                <div class="mb-3">
+                                                    <label class="form-label">Verification Code</label>
+                                                    <InputText @bind-Value="enableRequest.VerificationCode" class="form-control text-center" 
+                                                              placeholder="Enter 6-digit code" maxlength="8" />
+                                                    <ValidationMessage For="() => enableRequest.VerificationCode" />
+                                                </div>
+                                                
+                                                <div class="mb-3">
+                                                    <div class="form-check">
+                                                        <InputCheckbox @bind-Value="enableRequest.RequireForLogin" class="form-check-input" id="requireLogin" />
+                                                        <label class="form-check-label" for="requireLogin">
+                                                            Require for every login
+                                                        </label>
+                                                    </div>
+                                                    <div class="form-check">
+                                                        <InputCheckbox @bind-Value="enableRequest.RequireForSensitiveActions" class="form-check-input" id="requireSensitive" />
+                                                        <label class="form-check-label" for="requireSensitive">
+                                                            Require for sensitive actions
+                                                        </label>
+                                                    </div>
+                                                </div>
+                                                
+                                                <div class="d-grid gap-2">
+                                                    <button type="submit" class="btn btn-primary" disabled="@isLoading">
+                                                        @if (isLoading)
+                                                        {
+                                                            <i class="fas fa-spinner fa-spin"></i> Enabling...
+                                                        }
+                                                        else
+                                                        {
+                                                            <i class="fas fa-shield-alt"></i> Enable 2FA
+                                                        }
+                                                    </button>
+                                                    
+                                                    <button type="button" class="btn btn-outline-secondary" @onclick="CancelSetup">
+                                                        Cancel
+                                                    </button>
+                                                </div>
+                                            </EditForm>
+                                        }
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    }
+
+                    @if (!string.IsNullOrEmpty(message))
+                    {
+                        <div class="alert @(isSuccess ? "alert-success" : "alert-danger") mt-4">
+                            <i class="fas fa-@(isSuccess ? "check-circle" : "exclamation-triangle")"></i>
+                            @message
+                        </div>
+                    }
+                </div>
+            </div>
+
+            <!-- Security Tips -->
+            <div class="card shadow-sm">
+                <div class="card-header bg-info text-white">
+                    <h6 class="mb-0"><i class="fas fa-lightbulb"></i> Security Best Practices</h6>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <h6 class="text-primary">✅ Do:</h6>
+                            <ul class="small">
+                                <li>Keep backup codes in a secure location</li>
+                                <li>Use a password manager</li>
+                                <li>Enable 2FA on all important accounts</li>
+                                <li>Monitor your account regularly</li>
+                            </ul>
+                        </div>
+                        <div class="col-md-6">
+                            <h6 class="text-danger">❌ Don't:</h6>
+                            <ul class="small">
+                                <li>Share your verification codes</li>
+                                <li>Store codes in plain text</li>
+                                <li>Ignore security alerts</li>
+                                <li>Use the same password everywhere</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Backup Codes Modal -->
+<div class="modal fade" id="backupCodesModal" tabindex="-1" aria-labelledby="backupCodesModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header bg-warning text-dark">
+                <h5 class="modal-title" id="backupCodesModalLabel">
+                    <i class="fas fa-key"></i> Backup Codes
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-warning">
+                    <strong><i class="fas fa-exclamation-triangle"></i> Important Security Information</strong>
+                    <ul class="mt-2 mb-0">
+                        <li>Each backup code can only be used once</li>
+                        <li>Store these codes in a secure location</li>
+                        <li>These codes can bypass 2FA if your email is unavailable</li>
+                        <li>Generating new codes will invalidate all previous codes</li>
+                    </ul>
+                </div>
+
+                @if (showBackupCodesGeneration)
+                {
+                    <EditForm Model="generateBackupCodesRequest" OnValidSubmit="GenerateBackupCodes">
+                        <DataAnnotationsValidator />
+                        
+                        <div class="mb-3">
+                            <label class="form-label">Verification Code (sent to your email)</label>
+                            <InputText @bind-Value="generateBackupCodesRequest.VerificationCode" class="form-control text-center" 
+                                      placeholder="Enter 6-digit code" maxlength="8" />
+                            <ValidationMessage For="() => generateBackupCodesRequest.VerificationCode" />
+                        </div>
+                        
+                        <div class="d-grid gap-2">
+                            <button type="submit" class="btn btn-warning" disabled="@isLoading">
+                                @if (isLoading)
+                                {
+                                    <i class="fas fa-spinner fa-spin"></i> Generating...
+                                }
+                                else
+                                {
+                                    <i class="fas fa-key"></i> Generate New Backup Codes
+                                }
+                            </button>
+                            
+                            <button type="button" class="btn btn-outline-secondary" @onclick="CancelBackupCodeGeneration">
+                                Cancel
+                            </button>
+                        </div>
+                    </EditForm>
+                }
+                else if (generatedBackupCodes?.Any() == true)
+                {
+                    <div class="alert alert-success">
+                        <strong>New backup codes generated successfully!</strong>
+                    </div>
+                    
+                    <div class="row">
+                        @foreach (var code in generatedBackupCodes)
+                        {
+                            <div class="col-md-6 mb-2">
+                                <div class="card">
+                                    <div class="card-body text-center py-2">
+                                        <code class="fs-6">@code</code>
+                                    </div>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                    
+                    <div class="d-grid gap-2 mt-3">
+                        <button class="btn btn-primary" @onclick="DownloadBackupCodes">
+                            <i class="fas fa-download"></i> Download Codes
+                        </button>
+                        
+                        <button class="btn btn-outline-primary" @onclick="CopyBackupCodes">
+                            <i class="fas fa-copy"></i> Copy to Clipboard
+                        </button>
+                    </div>
+                }
+                else
+                {
+                    <p class="text-muted">Click the button below to send a verification code to your email and generate new backup codes.</p>
+                    
+                    <div class="d-grid">
+                        <button class="btn btn-warning" @onclick="SendBackupCodeVerification" disabled="@isLoading">
+                            @if (isLoading)
+                            {
+                                <i class="fas fa-spinner fa-spin"></i> Sending...
+                            }
+                            else
+                            {
+                                <i class="fas fa-envelope"></i> Send Verification Code
+                            }
+                        </button>
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Disable 2FA Modal -->
+<div class="modal fade" id="disable2FAModal" tabindex="-1" aria-labelledby="disable2FAModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header bg-danger text-white">
+                <h5 class="modal-title" id="disable2FAModalLabel">
+                    <i class="fas fa-shield-alt"></i> Disable Two-Factor Authentication
+                </h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-danger">
+                    <strong><i class="fas fa-exclamation-triangle"></i> Security Warning</strong>
+                    <p class="mt-2 mb-0">
+                        Disabling two-factor authentication will make your account less secure. 
+                        Your account will only be protected by your password.
+                    </p>
+                </div>
+
+                @if (showDisable2FAVerification)
+                {
+                    <EditForm Model="disableTwoFactorRequest" OnValidSubmit="DisableTwoFactor">
+                        <DataAnnotationsValidator />
+                        
+                        <div class="mb-3">
+                            <label class="form-label">Verification Code (sent to your email)</label>
+                            <InputText @bind-Value="disableTwoFactorRequest.VerificationCode" class="form-control text-center" 
+                                      placeholder="Enter 6-digit code" maxlength="8" />
+                            <ValidationMessage For="() => disableTwoFactorRequest.VerificationCode" />
+                        </div>
+                        
+                        <div class="mb-3">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="confirmDisable" required>
+                                <label class="form-check-label" for="confirmDisable">
+                                    I understand the security implications of disabling 2FA
+                                </label>
+                            </div>
+                        </div>
+                        
+                        <div class="d-grid gap-2">
+                            <button type="submit" class="btn btn-danger" disabled="@isLoading">
+                                @if (isLoading)
+                                {
+                                    <i class="fas fa-spinner fa-spin"></i> Disabling...
+                                }
+                                else
+                                {
+                                    <i class="fas fa-shield-alt"></i> Disable 2FA
+                                }
+                            </button>
+                            
+                            <button type="button" class="btn btn-outline-secondary" @onclick="CancelDisable2FA">
+                                Keep 2FA Enabled
+                            </button>
+                        </div>
+                    </EditForm>
+                }
+                else
+                {
+                    <p class="text-muted">To disable two-factor authentication, we need to verify your identity. Click below to send a verification code to your email.</p>
+                    
+                    <div class="d-grid">
+                        <button class="btn btn-danger" @onclick="SendDisable2FAVerification" disabled="@isLoading">
+                            @if (isLoading)
+                            {
+                                <i class="fas fa-spinner fa-spin"></i> Sending...
+                            }
+                            else
+                            {
+                                <i class="fas fa-envelope"></i> Send Verification Code
+                            }
+                        </button>
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private TwoFactorStatusResponse? currentStatus;
+    private EnableTwoFactorRequest enableRequest = new();
+    private GenerateBackupCodesRequest generateBackupCodesRequest = new();
+    private DisableTwoFactorRequest disableTwoFactorRequest = new();
+    private bool setupCodeSent = false;
+    private bool showBackupCodesGeneration = false;
+    private bool showDisable2FAVerification = false;
+    private bool isLoading = false;
+    private string message = "";
+    private bool isSuccess = false;
+    private List<string> generatedBackupCodes = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadTwoFactorStatus();
+    }
+
+    private async Task LoadTwoFactorStatus()
+    {
+        try
+        {
+            var response = await JSRuntime.InvokeAsync<string>("blessedRsiAuth.fetchWithAuth", "/api/twofactor/status");
+            currentStatus = JsonSerializer.Deserialize<TwoFactorStatusResponse>(response, new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            });
+        }
+        catch (Exception ex)
+        {
+            message = "Error loading 2FA status";
+            isSuccess = false;
+            Console.WriteLine($"Error loading 2FA status: {ex.Message}");
+        }
+    }
+
+    private async Task SendSetupCode()
+    {
+        isLoading = true;
+        message = "";
+
+        try
+        {
+            var response = await JSRuntime.InvokeAsync<string>("blessedRsiAuth.fetchWithAuth", "/api/twofactor/send-setup-code", new
+            {
+                method = "POST",
+                headers = new { Content_Type = "application/json" }
+            });
+
+            var result = JsonSerializer.Deserialize<AuthResponse>(response, new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            });
+
+            if (result?.Success == true)
+            {
+                setupCodeSent = true;
+                message = "Setup code sent to your email!";
+                isSuccess = true;
+            }
+            else
+            {
+                message = result?.Message ?? "Failed to send setup code";
+                isSuccess = false;
+            }
+        }
+        catch (Exception ex)
+        {
+            message = "Error sending setup code";
+            isSuccess = false;
+            Console.WriteLine($"Error sending setup code: {ex.Message}");
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private async Task EnableTwoFactor()
+    {
+        isLoading = true;
+        message = "";
+
+        try
+        {
+            var response = await JSRuntime.InvokeAsync<string>("blessedRsiAuth.fetchWithAuth", "/api/twofactor/enable", new
+            {
+                method = "POST",
+                headers = new { Content_Type = "application/json" },
+                body = JsonSerializer.Serialize(enableRequest)
+            });
+
+            var result = JsonSerializer.Deserialize<TwoFactorResponse>(response, new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            });
+
+            if (result?.Success == true)
+            {
+                message = "Two-factor authentication enabled successfully!";
+                isSuccess = true;
+                setupCodeSent = false;
+                enableRequest = new EnableTwoFactorRequest();
+                await LoadTwoFactorStatus();
+            }
+            else
+            {
+                message = result?.Message ?? "Failed to enable 2FA";
+                isSuccess = false;
+            }
+        }
+        catch (Exception ex)
+        {
+            message = "Error enabling 2FA";
+            isSuccess = false;
+            Console.WriteLine($"Error enabling 2FA: {ex.Message}");
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private void CancelSetup()
+    {
+        setupCodeSent = false;
+        enableRequest = new EnableTwoFactorRequest();
+        message = "";
+    }
+
+    private async Task ShowBackupCodes()
+    {
+        showBackupCodesGeneration = false;
+        generatedBackupCodes.Clear();
+        generateBackupCodesRequest = new GenerateBackupCodesRequest();
+        await JSRuntime.InvokeVoidAsync("eval", "new bootstrap.Modal(document.getElementById('backupCodesModal')).show()");
+    }
+
+    private async Task ShowDisable2FA()
+    {
+        showDisable2FAVerification = false;
+        disableTwoFactorRequest = new DisableTwoFactorRequest();
+        await JSRuntime.InvokeVoidAsync("eval", "new bootstrap.Modal(document.getElementById('disable2FAModal')).show()");
+    }
+
+    private async Task SendBackupCodeVerification()
+    {
+        isLoading = true;
+        message = "";
+
+        try
+        {
+            var response = await JSRuntime.InvokeAsync<string>("blessedRsiAuth.fetchWithAuth", "/api/twofactor/send-verification-code", new
+            {
+                method = "POST",
+                headers = new { Content_Type = "application/json" }
+            });
+
+            var result = JsonSerializer.Deserialize<AuthResponse>(response, new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            });
+
+            if (result?.Success == true)
+            {
+                showBackupCodesGeneration = true;
+                message = "Verification code sent to your email!";
+                isSuccess = true;
+            }
+            else
+            {
+                message = result?.Message ?? "Failed to send verification code";
+                isSuccess = false;
+            }
+        }
+        catch (Exception ex)
+        {
+            message = "Error sending verification code";
+            isSuccess = false;
+            Console.WriteLine($"Error sending verification code: {ex.Message}");
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private async Task GenerateBackupCodes()
+    {
+        isLoading = true;
+        message = "";
+
+        try
+        {
+            var response = await JSRuntime.InvokeAsync<string>("blessedRsiAuth.fetchWithAuth", "/api/twofactor/generate-backup-codes", new
+            {
+                method = "POST",
+                headers = new { Content_Type = "application/json" },
+                body = JsonSerializer.Serialize(generateBackupCodesRequest)
+            });
+
+            var result = JsonSerializer.Deserialize<BackupCodesResponse>(response, new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            });
+
+            if (result?.Success == true && result.BackupCodes?.Any() == true)
+            {
+                generatedBackupCodes = result.BackupCodes;
+                showBackupCodesGeneration = false;
+                message = "Backup codes generated successfully!";
+                isSuccess = true;
+                await LoadTwoFactorStatus();
+            }
+            else
+            {
+                message = result?.Message ?? "Failed to generate backup codes";
+                isSuccess = false;
+            }
+        }
+        catch (Exception ex)
+        {
+            message = "Error generating backup codes";
+            isSuccess = false;
+            Console.WriteLine($"Error generating backup codes: {ex.Message}");
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private void CancelBackupCodeGeneration()
+    {
+        showBackupCodesGeneration = false;
+        generateBackupCodesRequest = new GenerateBackupCodesRequest();
+        message = "";
+    }
+
+    private async Task SendDisable2FAVerification()
+    {
+        isLoading = true;
+        message = "";
+
+        try
+        {
+            var response = await JSRuntime.InvokeAsync<string>("blessedRsiAuth.fetchWithAuth", "/api/twofactor/send-verification-code", new
+            {
+                method = "POST",
+                headers = new { Content_Type = "application/json" }
+            });
+
+            var result = JsonSerializer.Deserialize<AuthResponse>(response, new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            });
+
+            if (result?.Success == true)
+            {
+                showDisable2FAVerification = true;
+                message = "Verification code sent to your email!";
+                isSuccess = true;
+            }
+            else
+            {
+                message = result?.Message ?? "Failed to send verification code";
+                isSuccess = false;
+            }
+        }
+        catch (Exception ex)
+        {
+            message = "Error sending verification code";
+            isSuccess = false;
+            Console.WriteLine($"Error sending verification code: {ex.Message}");
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private async Task DisableTwoFactor()
+    {
+        isLoading = true;
+        message = "";
+
+        try
+        {
+            var response = await JSRuntime.InvokeAsync<string>("blessedRsiAuth.fetchWithAuth", "/api/twofactor/disable", new
+            {
+                method = "POST",
+                headers = new { Content_Type = "application/json" },
+                body = JsonSerializer.Serialize(disableTwoFactorRequest)
+            });
+
+            var result = JsonSerializer.Deserialize<TwoFactorResponse>(response, new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            });
+
+            if (result?.Success == true)
+            {
+                message = "Two-factor authentication disabled successfully.";
+                isSuccess = true;
+                showDisable2FAVerification = false;
+                disableTwoFactorRequest = new DisableTwoFactorRequest();
+                await JSRuntime.InvokeVoidAsync("eval", "bootstrap.Modal.getInstance(document.getElementById('disable2FAModal')).hide()");
+                await LoadTwoFactorStatus();
+            }
+            else
+            {
+                message = result?.Message ?? "Failed to disable 2FA";
+                isSuccess = false;
+            }
+        }
+        catch (Exception ex)
+        {
+            message = "Error disabling 2FA";
+            isSuccess = false;
+            Console.WriteLine($"Error disabling 2FA: {ex.Message}");
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private void CancelDisable2FA()
+    {
+        showDisable2FAVerification = false;
+        disableTwoFactorRequest = new DisableTwoFactorRequest();
+        message = "";
+    }
+
+    private async Task DownloadBackupCodes()
+    {
+        var content = string.Join("\n", generatedBackupCodes.Select((code, index) => $"{index + 1}. {code}"));
+        var fileName = $"BlessedRSI-BackupCodes-{DateTime.UtcNow:yyyy-MM-dd}.txt";
+        
+        await JSRuntime.InvokeVoidAsync("downloadFile", fileName, content, "text/plain");
+    }
+
+    private async Task CopyBackupCodes()
+    {
+        var content = string.Join("\n", generatedBackupCodes);
+        await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", content);
+        
+        message = "Backup codes copied to clipboard!";
+        isSuccess = true;
+        
+        // Clear message after 3 seconds
+        await Task.Delay(3000);
+        message = "";
+    }
+}

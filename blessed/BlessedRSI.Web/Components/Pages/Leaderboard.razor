@@ -1,0 +1,310 @@
+@page "/leaderboard"
+@using BlessedRSI.Web.Models
+@using BlessedRSI.Web.Services
+@inject LeaderboardService LeaderboardService
+
+<PageTitle>Community Leaderboard - BlessedRSI</PageTitle>
+
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-12">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <h2><i class="fas fa-trophy text-warning"></i> Community Leaderboard</h2>
+                <div class="text-muted">
+                    <i class="fas fa-bible"></i>
+                    <em>"Iron sharpens iron, and one man sharpens another." - Proverbs 27:17</em>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Filter Tabs -->
+    <ul class="nav nav-tabs mb-4">
+        <li class="nav-item">
+            <a class="nav-link @(activeTab == "sortino" ? "active" : "")" 
+               @onclick="() => SetActiveTab(\"sortino\")" style="cursor: pointer;">
+                <i class="fas fa-chart-line"></i> Sortino Leaders
+            </a>
+        </li>
+        <li class="nav-item">
+            <a class="nav-link @(activeTab == "returns" ? "active" : "")" 
+               @onclick="() => SetActiveTab(\"returns\")" style="cursor: pointer;">
+                <i class="fas fa-percentage"></i> Return Champions
+            </a>
+        </li>
+        <li class="nav-item">
+            <a class="nav-link @(activeTab == "consistency" ? "active" : "")" 
+               @onclick="() => SetActiveTab(\"consistency\")" style="cursor: pointer;">
+                <i class="fas fa-medal"></i> Consistency Masters
+            </a>
+        </li>
+        <li class="nav-item">
+            <a class="nav-link @(activeTab == "community" ? "active" : "")" 
+               @onclick="() => SetActiveTab(\"community\")" style="cursor: pointer;">
+                <i class="fas fa-heart"></i> Community Stars
+            </a>
+        </li>
+    </ul>
+
+    <div class="row">
+        <!-- Main Leaderboard -->
+        <div class="col-lg-8">
+            <div class="card shadow-sm">
+                <div class="card-header bg-warning text-dark">
+                    <h5 class="mb-0">
+                        @GetTabTitle()
+                        <span class="badge bg-primary ms-2">@GetTabDescription()</span>
+                    </h5>
+                </div>
+                <div class="card-body p-0">
+                    <div class="table-responsive">
+                        <table class="table table-hover mb-0">
+                            <thead class="table-light">
+                                <tr>
+                                    <th style="width: 80px;">Rank</th>
+                                    <th>Steward</th>
+                                    <th>Strategy</th>
+                                    <th>@GetMetricHeader()</th>
+                                    <th>Achievements</th>
+                                    <th>Last Active</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @if (currentLeaderboard.Any())
+                                {
+                                    @for (int i = 0; i < currentLeaderboard.Count; i++)
+                                    {
+                                        var entry = currentLeaderboard[i];
+                                        <tr class="@GetRowClass(i + 1)">
+                                            <td class="text-center">
+                                                @if (i < 3)
+                                                {
+                                                    <i class="fas fa-crown @GetCrownColor(i + 1) fa-lg"></i>
+                                                    <small class="d-block">@(i + 1)</small>
+                                                }
+                                                else
+                                                {
+                                                    <span class="badge bg-secondary">@(i + 1)</span>
+                                                }
+                                            </td>
+                                            <td>
+                                                <div class="d-flex align-items-center">
+                                                    <div class="avatar-circle me-2">
+                                                        @GetUserInitials(entry.UserName)
+                                                    </div>
+                                                    <div>
+                                                        <div class="fw-bold">@entry.UserName</div>
+                                                        @if (!string.IsNullOrEmpty(entry.FavoriteVerse))
+                                                        {
+                                                            <small class="text-muted">@entry.FavoriteVerse</small>
+                                                        }
+                                                    </div>
+                                                </div>
+                                            </td>
+                                            <td>
+                                                @if (!string.IsNullOrEmpty(entry.BestStrategyName))
+                                                {
+                                                    <span class="badge bg-primary">@entry.BestStrategyName</span>
+                                                }
+                                                else
+                                                {
+                                                    <span class="text-muted">-</span>
+                                                }
+                                            </td>
+                                            <td class="fw-bold @GetMetricClass(entry)">
+                                                @GetMetricValue(entry)
+                                            </td>
+                                            <td>
+                                                @foreach (var achievement in entry.TopAchievements.Take(3))
+                                                {
+                                                    <i class="@achievement.IconClass text-warning me-1" 
+                                                       title="@achievement.Name"></i>
+                                                }
+                                            </td>
+                                            <td class="text-muted small">
+                                                @entry.LastActive.ToString("MMM dd")
+                                            </td>
+                                        </tr>
+                                    }
+                                }
+                                else
+                                {
+                                    <tr>
+                                        <td colspan="6" class="text-center py-4 text-muted">
+                                            <i class="fas fa-users fa-2x mb-2"></i>
+                                            <p>Be the first to join the leaderboard!</p>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Sidebar -->
+        <div class="col-lg-4">
+            <!-- Featured Strategies -->
+            <div class="card shadow-sm mb-4">
+                <div class="card-header bg-success text-white">
+                    <h6 class="mb-0"><i class="fas fa-star"></i> Featured Strategies</h6>
+                </div>
+                <div class="card-body">
+                    @if (featuredStrategies.Any())
+                    {
+                        @foreach (var strategy in featuredStrategies)
+                        {
+                            <div class="border-bottom pb-2 mb-2">
+                                <div class="d-flex justify-content-between align-items-start">
+                                    <div>
+                                        <strong>@strategy.BiblicalName</strong>
+                                        <small class="d-block text-muted">by @strategy.CreatedBy</small>
+                                        <small class="text-success">@strategy.SortinoRatio.ToString("F2") Sortino</small>
+                                    </div>
+                                </div>
+                                @if (!string.IsNullOrEmpty(strategy.RelatedVerse))
+                                {
+                                    <small class="text-muted fst-italic">
+                                        "@strategy.RelatedVerse"
+                                    </small>
+                                }
+                            </div>
+                        }
+                    }
+                    else
+                    {
+                        <p class="text-muted mb-0">No featured strategies yet.</p>
+                    }
+                </div>
+            </div>
+
+            <!-- Community Stats -->
+            <div class="card shadow-sm">
+                <div class="card-header bg-primary text-white">
+                    <h6 class="mb-0"><i class="fas fa-chart-pie"></i> Community Stats</h6>
+                </div>
+                <div class="card-body">
+                    <div class="row text-center">
+                        <div class="col-6">
+                            <h5 class="text-info mb-0">@communityStats.AvgSortinoRatio.ToString("F2")</h5>
+                            <small class="text-muted">Avg Sortino</small>
+                        </div>
+                        <div class="col-6">
+                            <h5 class="text-warning mb-0">@communityStats.SharedStrategies</h5>
+                            <small class="text-muted">Shared</small>
+                        </div>
+                    </div>
+                    <hr>
+                    <div class="row text-center">
+                        <div class="col-6">
+                            <h4 class="text-primary mb-0">@communityStats.TotalMembers</h4>
+                            <small class="text-muted">Members</small>
+                        </div>
+                        <div class="col-6">
+                            <h4 class="text-success mb-0">@communityStats.TotalBacktests</h4>
+                            <small class="text-muted">Backtests</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private string activeTab = "sortino";
+    private List<LeaderboardEntry> currentLeaderboard = new();
+    private List<FeaturedStrategy> featuredStrategies = new();
+    private CommunityStats communityStats = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadLeaderboardData();
+    }
+
+    private async Task SetActiveTab(string tab)
+    {
+        activeTab = tab;
+        await LoadLeaderboardData();
+    }
+
+    private async Task LoadLeaderboardData()
+    {
+        currentLeaderboard = activeTab switch
+        {
+            "sortino" => await LeaderboardService.GetSortinoLeadersAsync(),
+            "returns" => await LeaderboardService.GetReturnLeadersAsync(),
+            "consistency" => await LeaderboardService.GetConsistencyLeadersAsync(),
+            "community" => await LeaderboardService.GetCommunityLeadersAsync(),
+            _ => new List<LeaderboardEntry>()
+        };
+
+        featuredStrategies = await LeaderboardService.GetFeaturedStrategiesAsync();
+        communityStats = await LeaderboardService.GetCommunityStatsAsync();
+    }
+
+    private string GetTabTitle() => activeTab switch
+    {
+        "sortino" => "Sortino Ratio Leaders",
+        "returns" => "Total Return Champions",
+        "consistency" => "Consistency Masters",
+        "community" => "Community Contributors",
+        _ => "Leaderboard"
+    };
+
+    private string GetTabDescription() => activeTab switch
+    {
+        "sortino" => "Risk-Adjusted Excellence",
+        "returns" => "Highest Returns",
+        "consistency" => "Steady Stewardship",
+        "community" => "Faithful Fellowship",
+        _ => ""
+    };
+
+    private string GetMetricHeader() => activeTab switch
+    {
+        "sortino" => "Sortino Ratio",
+        "returns" => "Total Return",
+        "consistency" => "Win Rate",
+        "community" => "Community Points",
+        _ => "Score"
+    };
+
+    private string GetMetricValue(LeaderboardEntry entry) => activeTab switch
+    {
+        "sortino" => entry.BestSortinoRatio.ToString("F2"),
+        "returns" => entry.BestTotalReturn.ToString("P2"),
+        "consistency" => entry.BestWinRate.ToString("P1"),
+        "community" => entry.CommunityPoints.ToString(),
+        _ => "0"
+    };
+
+    private string GetMetricClass(LeaderboardEntry entry) => activeTab switch
+    {
+        "sortino" => entry.BestSortinoRatio > 5.0m ? "text-success" : "text-primary",
+        "returns" => entry.BestTotalReturn > 1.0m ? "text-success" : "text-primary",
+        "consistency" => entry.BestWinRate > 0.7m ? "text-success" : "text-primary",
+        "community" => entry.CommunityPoints > 100 ? "text-success" : "text-primary",
+        _ => "text-primary"
+    };
+
+    private string GetRowClass(int rank) => rank <= 3 ? "table-warning" : "";
+
+    private string GetCrownColor(int rank) => rank switch
+    {
+        1 => "crown-gold",
+        2 => "crown-silver",
+        3 => "crown-bronze",
+        _ => "text-muted"
+    };
+
+    private string GetUserInitials(string userName)
+    {
+        if (string.IsNullOrEmpty(userName)) return "?";
+        var parts = userName.Split(' ');
+        return parts.Length > 1 
+            ? $"{parts[0][0]}{parts[1][0]}" 
+            : userName.Substring(0, Math.Min(2, userName.Length));
+    }
+}

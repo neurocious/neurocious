@@ -1,0 +1,287 @@
+@using Microsoft.AspNetCore.Components.Authorization
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@inject NavigationManager NavigationManager
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>@ViewData["Title"] - BlessedRSI</title>
+    <base href="~/" />
+    
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    
+    <!-- Font Awesome -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    
+    <!-- Custom CSS -->
+    <link href="css/site.css" rel="stylesheet" />
+    <link href="BlessedRSI.Web.styles.css" rel="stylesheet" />
+    
+    <!-- Favicon -->
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
+</head>
+
+<body>
+    <!-- Top Navigation -->
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary shadow-sm">
+        <div class="container-fluid">
+            <!-- Brand -->
+            <a class="navbar-brand fw-bold" href="/">
+                <i class="fas fa-chart-line me-2"></i>
+                BlessedRSI
+                <small class="text-light opacity-75 ms-2">Faith-Based Investing</small>
+            </a>
+
+            <!-- Mobile toggle -->
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+
+            <!-- Navigation Links -->
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav me-auto">
+                    <li class="nav-item">
+                        <a class="nav-link @GetActiveClass("/")" href="/">
+                            <i class="fas fa-home"></i> Home
+                        </a>
+                    </li>
+                    
+                    <AuthorizeView>
+                        <Authorized>
+                            <li class="nav-item">
+                                <a class="nav-link @GetActiveClass("/backtest")" href="/backtest">
+                                    <i class="fas fa-chart-line"></i> Strategy Tester
+                                </a>
+                            </li>
+                            <li class="nav-item">
+                                <a class="nav-link @GetActiveClass("/leaderboard")" href="/leaderboard">
+                                    <i class="fas fa-trophy"></i> Leaderboard
+                                </a>
+                            </li>
+                            <li class="nav-item">
+                                <a class="nav-link @GetActiveClass("/community")" href="/community">
+                                    <i class="fas fa-users"></i> Community
+                                </a>
+                            </li>
+                        </Authorized>
+                        <NotAuthorized>
+                            <li class="nav-item">
+                                <a class="nav-link" href="/about">
+                                    <i class="fas fa-info-circle"></i> About E-RSI
+                                </a>
+                            </li>
+                            <li class="nav-item">
+                                <a class="nav-link" href="/pricing">
+                                    <i class="fas fa-tags"></i> Pricing
+                                </a>
+                            </li>
+                        </NotAuthorized>
+                    </AuthorizeView>
+                </ul>
+
+                <!-- Right side navigation -->
+                <ul class="navbar-nav">
+                    <AuthorizeView>
+                        <Authorized>
+                            <!-- User Menu -->
+                            <li class="nav-item dropdown">
+                                <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown">
+                                    <div class="d-inline-flex align-items-center">
+                                        <div class="avatar-circle-nav me-2">
+                                            @GetUserInitials()
+                                        </div>
+                                        @GetUserDisplayName()
+                                    </div>
+                                </a>
+                                <ul class="dropdown-menu dropdown-menu-end">
+                                    <li><h6 class="dropdown-header">@GetUserEmail()</h6></li>
+                                    <li><hr class="dropdown-divider"></li>
+                                    <li><a class="dropdown-item" href="/profile">
+                                        <i class="fas fa-user"></i> My Profile
+                                    </a></li>
+                                    <li><a class="dropdown-item" href="/my-strategies">
+                                        <i class="fas fa-chart-bar"></i> My Strategies
+                                    </a></li>
+                                    <li><a class="dropdown-item" href="/achievements">
+                                        <i class="fas fa-trophy"></i> Achievements
+                                    </a></li>
+                                    <li><hr class="dropdown-divider"></li>
+                                    <li>
+                                        <form method="post" action="/Account/Logout">
+                                            <button type="submit" class="dropdown-item">
+                                                <i class="fas fa-sign-out-alt"></i> Sign Out
+                                            </button>
+                                        </form>
+                                    </li>
+                                </ul>
+                            </li>
+                        </Authorized>
+                        <NotAuthorized>
+                            <li class="nav-item">
+                                <a class="nav-link" href="/Account/Login">
+                                    <i class="fas fa-sign-in-alt"></i> Sign In
+                                </a>
+                            </li>
+                            <li class="nav-item">
+                                <a class="btn btn-outline-light btn-sm ms-2" href="/Account/Register">
+                                    <i class="fas fa-user-plus"></i> Get Started Free
+                                </a>
+                            </li>
+                        </NotAuthorized>
+                    </AuthorizeView>
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Verse of the Day Banner -->
+    <div class="bg-light border-bottom py-2 d-none d-md-block">
+        <div class="container-fluid">
+            <div class="row align-items-center">
+                <div class="col-auto">
+                    <i class="fas fa-bible text-primary"></i>
+                </div>
+                <div class="col">
+                    <small class="text-muted">
+                        <strong>Verse of the Day:</strong>
+                        <em>
+                            "Trust in the Lord with all your heart and lean not on your own understanding." - Proverbs 3:5
+                        </em>
+                    </small>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <main class="flex-grow-1">
+        @Body
+    </main>
+
+    <!-- Footer -->
+    <footer class="bg-dark text-light py-4 mt-5">
+        <div class="container-fluid">
+            <div class="row">
+                <div class="col-lg-3 mb-3">
+                    <h5 class="text-primary">
+                        <i class="fas fa-chart-line me-2"></i>
+                        BlessedRSI
+                    </h5>
+                    <p class="small text-muted">
+                        Faith-based investment education using Epistemic RSI technology. 
+                        Learn to invest with biblical wisdom and cutting-edge AI.
+                    </p>
+                </div>
+                
+                <div class="col-lg-2 mb-3">
+                    <h6 class="text-primary">Platform</h6>
+                    <ul class="list-unstyled small">
+                        <li><a href="/backtest" class="text-light text-decoration-none">Strategy Tester</a></li>
+                        <li><a href="/leaderboard" class="text-light text-decoration-none">Leaderboard</a></li>
+                        <li><a href="/community" class="text-light text-decoration-none">Community</a></li>
+                    </ul>
+                </div>
+                
+                <div class="col-lg-2 mb-3">
+                    <h6 class="text-primary">Learn</h6>
+                    <ul class="list-unstyled small">
+                        <li><a href="/education" class="text-light text-decoration-none">E-RSI Education</a></li>
+                        <li><a href="/devotionals" class="text-light text-decoration-none">Daily Devotionals</a></li>
+                        <li><a href="/biblical-principles" class="text-light text-decoration-none">Biblical Principles</a></li>
+                    </ul>
+                </div>
+                
+                <div class="col-lg-2 mb-3">
+                    <h6 class="text-primary">Support</h6>
+                    <ul class="list-unstyled small">
+                        <li><a href="/help" class="text-light text-decoration-none">Help Center</a></li>
+                        <li><a href="/contact" class="text-light text-decoration-none">Contact Us</a></li>
+                        <li><a href="/prayer-requests" class="text-light text-decoration-none">Prayer Requests</a></li>
+                    </ul>
+                </div>
+            </div>
+            
+            <hr class="my-4">
+            
+            <div class="row align-items-center">
+                <div class="col-md-6">
+                    <small class="text-muted">
+                        &copy; @DateTime.Now.Year BlessedRSI. Built with faith and technology.
+                    </small>
+                </div>
+                <div class="col-md-6 text-md-end">
+                    <small>
+                        <a href="/privacy" class="text-light text-decoration-none me-3">Privacy</a>
+                        <a href="/terms" class="text-light text-decoration-none me-3">Terms</a>
+                        <a href="/disclaimer" class="text-light text-decoration-none">Disclaimer</a>
+                    </small>
+                </div>
+            </div>
+        </div>
+    </footer>
+
+    <!-- Scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="js/auth.js"></script>
+    <script src="_framework/blazor.server.js"></script>
+</body>
+</html>
+
+@code {
+    protected override async Task OnInitializedAsync()
+    {
+        // Load user data if authenticated
+    }
+
+    private string GetActiveClass(string path)
+    {
+        var currentPath = NavigationManager.ToBaseRelativePath(NavigationManager.Uri);
+        return currentPath.StartsWith(path.TrimStart('/')) ? "active" : "";
+    }
+
+    private string GetUserDisplayName()
+    {
+        // Get from auth state - placeholder
+        return "John Smith";
+    }
+
+    private string GetUserEmail()
+    {
+        // Get from auth state - placeholder
+        return "john.smith@example.com";
+    }
+
+    private string GetUserInitials()
+    {
+        var name = GetUserDisplayName();
+        var parts = name.Split(' ');
+        return parts.Length > 1 ? $"{parts[0][0]}{parts[1][0]}" : name.Substring(0, Math.Min(2, name.Length));
+    }
+}
+
+<style>
+    .avatar-circle-nav {
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        background-color: rgba(255, 255, 255, 0.2);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        font-weight: bold;
+        font-size: 12px;
+    }
+
+    .nav-link.active {
+        background-color: rgba(255, 255, 255, 0.1);
+        border-radius: 0.375rem;
+    }
+
+    main {
+        min-height: calc(100vh - 200px);
+    }
+</style>
