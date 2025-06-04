@@ -108,7 +108,7 @@ public class SubscriptionService
         var user = await _context.Users
             .FirstOrDefaultAsync(u => u.Email == invoice.CustomerEmail);
         
-        if (user != null && user.SubscriptionTier != SubscriptionTier.Seeker)
+        if (user != null && user.SubscriptionTier != SubscriptionTier.Sparrow)
         {
             user.SubscriptionExpiresAt = DateTime.UtcNow.AddMonths(1);
             await _context.SaveChangesAsync();
@@ -128,7 +128,7 @@ public class SubscriptionService
         
         if (user != null)
         {
-            user.SubscriptionTier = SubscriptionTier.Seeker;
+            user.SubscriptionTier = SubscriptionTier.Sparrow;
             user.SubscriptionExpiresAt = null;
             await _context.SaveChangesAsync();
         }
@@ -138,9 +138,9 @@ public class SubscriptionService
     {
         return tier switch
         {
-            SubscriptionTier.Believer => _configuration["Stripe:BelieverPriceId"] ?? "price_believer",
-            SubscriptionTier.Disciple => _configuration["Stripe:DisciplePriceId"] ?? "price_disciple",
-            SubscriptionTier.Apostle => _configuration["Stripe:ApostlePriceId"] ?? "price_apostle",
+            SubscriptionTier.Lion => _configuration["Stripe:LionPriceId"] ?? "price_lion",
+            SubscriptionTier.Eagle => _configuration["Stripe:EaglePriceId"] ?? "price_eagle",
+            SubscriptionTier.Shepherd => _configuration["Stripe:ShepherdPriceId"] ?? "price_shepherd",
             _ => throw new ArgumentException("Invalid subscription tier")
         };
     }
@@ -150,19 +150,19 @@ public class SubscriptionService
         var user = await _context.Users.FindAsync(userId);
         if (user == null) return false;
 
-        return user.SubscriptionTier != SubscriptionTier.Seeker &&
+        return user.SubscriptionTier != SubscriptionTier.Sparrow &&
                (user.SubscriptionExpiresAt == null || user.SubscriptionExpiresAt > DateTime.UtcNow);
     }
 
     public async Task<SubscriptionTier> GetUserSubscriptionTierAsync(string userId)
     {
         var user = await _context.Users.FindAsync(userId);
-        if (user == null) return SubscriptionTier.Seeker;
+        if (user == null) return SubscriptionTier.Sparrow;
 
         // Check if subscription is expired
         if (user.SubscriptionExpiresAt != null && user.SubscriptionExpiresAt <= DateTime.UtcNow)
         {
-            user.SubscriptionTier = SubscriptionTier.Seeker;
+            user.SubscriptionTier = SubscriptionTier.Sparrow;
             user.SubscriptionExpiresAt = null;
             await _context.SaveChangesAsync();
         }

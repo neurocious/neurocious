@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using BlessedRSI.Web.Attributes;
 
 namespace BlessedRSI.Web.Models;
 
@@ -10,8 +11,10 @@ public class CommunityPost
     public ApplicationUser User { get; set; } = null!;
     
     [StringLength(200)]
+    [PlainTextOnly]
     public string Title { get; set; } = string.Empty;
     
+    [SafeHtml]
     public string Content { get; set; } = string.Empty;
     
     public PostType Type { get; set; }
@@ -24,6 +27,7 @@ public class CommunityPost
     public bool IsPinned { get; set; }
     
     [StringLength(500)]
+    [BiblicalQuote]
     public string? RelatedVerse { get; set; }
     
     public ICollection<PostComment> Comments { get; set; } = new List<PostComment>();
@@ -50,6 +54,7 @@ public class PostComment
     public int PostId { get; set; }
     public CommunityPost Post { get; set; } = null!;
     
+    [SafeHtml]
     public string Content { get; set; } = string.Empty;
     
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;

@@ -111,12 +111,12 @@ builder.Services.AddAuthorization(options =>
 {
     options.AddPolicy("RequireUser", policy => policy.RequireRole("User"));
     options.AddPolicy("RequireAdmin", policy => policy.RequireRole("Admin"));
-    options.AddPolicy("RequireBelieversOrHigher", policy => 
+    options.AddPolicy("RequireLionOrHigher", policy => 
         policy.RequireAssertion(context =>
             context.User.IsInRole("Admin") ||
-            (context.User.HasClaim("subscription_tier", "Believer") ||
-             context.User.HasClaim("subscription_tier", "Disciple") ||
-             context.User.HasClaim("subscription_tier", "Apostle"))));
+            (context.User.HasClaim("subscription_tier", "Lion") ||
+             context.User.HasClaim("subscription_tier", "Eagle") ||
+             context.User.HasClaim("subscription_tier", "Shepherd"))));
 });
 
 builder.Services.AddRazorPages();
@@ -125,6 +125,14 @@ builder.Services.AddControllers();
 
 // Register custom authentication state provider
 builder.Services.AddScoped<AuthenticationStateProvider, CustomAuthenticationStateProvider>();
+
+// Configure rate limiting
+builder.Services.Configure<RateLimitSettings>(
+    builder.Configuration.GetSection("RateLimitSettings"));
+
+// Configure email settings
+builder.Services.Configure<EmailConfiguration>(
+    builder.Configuration.GetSection("EmailSettings"));
 
 // Configure FluentEmail
 var emailSettings = builder.Configuration.GetSection("EmailSettings");
@@ -139,12 +147,19 @@ builder.Services
 builder.Services.AddScoped<JwtService>();
 builder.Services.AddScoped<AuthService>();
 builder.Services.AddScoped<EmailService>();
+builder.Services.AddScoped<EnhancedEmailService>();
 builder.Services.AddScoped<TwoFactorAuthService>();
+builder.Services.AddScoped<ApiKeyService>();
+builder.Services.AddScoped<RateLimitService>();
+builder.Services.AddScoped<ContentSanitizationService>();
 builder.Services.AddScoped<TradingApiService>();
 builder.Services.AddScoped<BacktestService>();
 builder.Services.AddScoped<LeaderboardService>();
 builder.Services.AddScoped<CommunityService>();
 builder.Services.AddScoped<SubscriptionService>();
+
+// Add startup validation service
+builder.Services.AddHostedService<StartupValidationService>();
 
 // Add HttpContextAccessor for getting client IP
 builder.Services.AddHttpContextAccessor();
@@ -221,21 +236,11 @@ app.UseCors("AllowBlazorClient");
 
 // Authentication & Authorization
 app.UseAuthentication();
+app.UseMiddleware<BlessedRSI.Web.Middleware.ApiKeyAuthenticationMiddleware>();
 app.UseAuthorization();
 
 // Add rate limiting middleware
-app.Use(async (context, next) =>
-{
-    // Simple rate limiting - in production use a proper rate limiting library
-    if (context.Request.Path.StartsWithSegments("/api"))
-    {
-        var clientIp = context.Connection.RemoteIpAddress?.ToString();
-        // Log rate limiting info
-        Log.Information("API request from {ClientIp} to {Path}", clientIp, context.Request.Path);
-    }
-    
-    await next();
-});
+app.UseMiddleware<BlessedRSI.Web.Middleware.RateLimitingMiddleware>();
 
 // Map routes
 app.MapControllers();
@@ -297,7 +302,7 @@ static async Task SeedDataAsync(ApplicationDbContext context, UserManager<Applic
             FirstName = "Admin",
             LastName = "User",
             EmailConfirmed = true,
-            SubscriptionTier = SubscriptionTier.Apostle,
+            SubscriptionTier = SubscriptionTier.Shepherd,
             CreatedAt = DateTime.UtcNow
         };
         

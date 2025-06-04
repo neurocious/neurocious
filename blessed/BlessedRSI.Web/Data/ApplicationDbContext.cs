@@ -24,6 +24,9 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
     public DbSet<TwoFactorAuthenticationCode> TwoFactorAuthenticationCodes { get; set; }
     public DbSet<TwoFactorBackupCode> TwoFactorBackupCodes { get; set; }
     public DbSet<TwoFactorSettings> TwoFactorSettings { get; set; }
+    public DbSet<UserApiKey> UserApiKeys { get; set; }
+    public DbSet<ApiKeyUsageLog> ApiKeyUsageLogs { get; set; }
+    public DbSet<RateLimitEntry> RateLimitEntries { get; set; }
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -113,6 +116,54 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
 
         builder.Entity<TwoFactorBackupCode>()
             .HasIndex(bc => bc.Code);
+
+        // Configure API key relationships
+        builder.Entity<UserApiKey>()
+            .HasOne(ak => ak.User)
+            .WithMany()
+            .HasForeignKey(ak => ak.UserId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        builder.Entity<ApiKeyUsageLog>()
+            .HasOne(ul => ul.ApiKey)
+            .WithMany(ak => ak.UsageLogs)
+            .HasForeignKey(ul => ul.ApiKeyId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        // Configure indexes for API key performance
+        builder.Entity<UserApiKey>()
+            .HasIndex(ak => ak.ApiKeyHash)
+            .IsUnique();
+
+        builder.Entity<UserApiKey>()
+            .HasIndex(ak => new { ak.UserId, ak.IsActive });
+
+        builder.Entity<UserApiKey>()
+            .HasIndex(ak => ak.Prefix);
+
+        builder.Entity<ApiKeyUsageLog>()
+            .HasIndex(ul => new { ul.ApiKeyId, ul.RequestedAt });
+
+        builder.Entity<ApiKeyUsageLog>()
+            .HasIndex(ul => ul.RequestedAt);
+
+        // Configure rate limit relationships
+        builder.Entity<RateLimitEntry>()
+            .HasOne(rl => rl.User)
+            .WithMany()
+            .HasForeignKey(rl => rl.UserId)
+            .OnDelete(DeleteBehavior.SetNull);
+
+        // Configure indexes for rate limiting performance
+        builder.Entity<RateLimitEntry>()
+            .HasIndex(rl => new { rl.IpAddress, rl.Endpoint, rl.UserId, rl.RateLimitType, rl.WindowStart })
+            .IsUnique();
+
+        builder.Entity<RateLimitEntry>()
+            .HasIndex(rl => rl.LastRequest);
+
+        builder.Entity<RateLimitEntry>()
+            .HasIndex(rl => new { rl.IpAddress, rl.RateLimitType });
 
         // Seed data
         builder.Entity<Achievement>().HasData(

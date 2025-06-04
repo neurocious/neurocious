@@ -13,7 +13,7 @@ public class ApplicationUser : IdentityUser
     
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     
-    public SubscriptionTier SubscriptionTier { get; set; } = SubscriptionTier.Seeker;
+    public SubscriptionTier SubscriptionTier { get; set; } = SubscriptionTier.Sparrow;
     
     public DateTime? SubscriptionExpiresAt { get; set; }
     
@@ -45,8 +45,8 @@ public class ApplicationUser : IdentityUser
 
 public enum SubscriptionTier
 {
-    Seeker = 0,      // Free
-    Believer = 1,    // $29/month
-    Disciple = 2,    // $99/month
-    Apostle = 3      // $299/month
+    Sparrow = 0,     // Free - "Consider the sparrows..." (Luke 12:24)
+    Lion = 1,        // $29/month - "Bold as a lion" (Proverbs 28:1)
+    Eagle = 2,       // $99/month - "Soar on wings like eagles" (Isaiah 40:31)
+    Shepherd = 3     // $299/month - Ultimate leadership/guidance tier
 }

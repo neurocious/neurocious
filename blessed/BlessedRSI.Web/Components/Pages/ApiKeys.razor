@@ -1,0 +1,432 @@
+@page "/account/api-keys"
+@using BlessedRSI.Web.Models
+@using BlessedRSI.Web.Utilities
+@using Microsoft.AspNetCore.Authorization
+@using System.Text.Json
+@inject IJSRuntime JSRuntime
+@inject NavigationManager Navigation
+@attribute [Authorize]
+
+<PageTitle>API Keys - BlessedRSI</PageTitle>
+
+<div class="container">
+    <div class="row justify-content-center">
+        <div class="col-lg-10">
+            <!-- Header -->
+            <div class="card shadow-lg border-0 mb-4">
+                <div class="card-header bg-primary text-white py-4">
+                    <div class="text-center">
+                        <h3 class="mb-2">
+                            <i class="fas fa-key me-2"></i>
+                            API Keys Management
+                        </h3>
+                        <p class="mb-0 opacity-75">Manage your API keys for programmatic access</p>
+                    </div>
+                </div>
+                
+                <div class="card-body p-4">
+                    <!-- Biblical Verse -->
+                    <div class="text-center mb-4">
+                        <blockquote class="blockquote-footer small">
+                            <em>"Ask and it will be given to you; seek and you will find; knock and the door will be opened to you."</em>
+                            <span class="text-muted">- Matthew 7:7</span>
+                        </blockquote>
+                    </div>
+
+                    @if (userSubscriptionTier != SubscriptionTier.Shepherd)
+                    {
+                        <!-- Subscription Required Notice -->
+                        <div class="alert alert-warning">
+                            <h5><i class="fas fa-crown"></i> Shepherd Subscription Required</h5>
+                            <p class="mb-2">API access is available exclusively to Shepherd tier subscribers.</p>
+                            <p class="mb-3">Upgrade your subscription to unlock powerful programmatic access to BlessedRSI's trading platform.</p>
+                            <a href="/subscription" class="btn btn-warning">
+                                <i class="fas fa-arrow-up"></i> Upgrade to Shepherd
+                            </a>
+                        </div>
+                    }
+                    else
+                    {
+                        <!-- API Keys Management -->
+                        <div class="row mb-4">
+                            <div class="col-md-8">
+                                <h5>Your API Keys</h5>
+                                <p class="text-muted">Create and manage API keys for secure programmatic access.</p>
+                            </div>
+                            <div class="col-md-4 text-end">
+                                <button class="btn btn-primary" @onclick="ShowCreateModal" disabled="@(apiKeys.Count >= 5)">
+                                    <i class="fas fa-plus"></i> Create New Key
+                                </button>
+                            </div>
+                        </div>
+
+                        @if (apiKeys.Any())
+                        {
+                            <div class="table-responsive">
+                                <table class="table table-hover">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th>Name</th>
+                                            <th>Prefix</th>
+                                            <th>Created</th>
+                                            <th>Last Used</th>
+                                            <th>Status</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @foreach (var key in apiKeys)
+                                        {
+                                            <tr>
+                                                <td>
+                                                    <strong>@key.Name</strong>
+                                                    @if (!string.IsNullOrEmpty(key.Description))
+                                                    {
+                                                        <br><small class="text-muted">@key.Description</small>
+                                                    }
+                                                </td>
+                                                <td>
+                                                    <code>@key.Prefix***</code>
+                                                </td>
+                                                <td>
+                                                    <small>@key.CreatedAt.ToString("MMM dd, yyyy")</small>
+                                                </td>
+                                                <td>
+                                                    @if (key.LastUsedAt.HasValue)
+                                                    {
+                                                        <small>@key.LastUsedAt.Value.ToString("MMM dd, yyyy")</small>
+                                                    }
+                                                    else
+                                                    {
+                                                        <small class="text-muted">Never</small>
+                                                    }
+                                                </td>
+                                                <td>
+                                                    @if (key.IsExpired)
+                                                    {
+                                                        <span class="badge bg-danger">Expired</span>
+                                                    }
+                                                    else if (key.IsActive)
+                                                    {
+                                                        <span class="badge bg-success">Active</span>
+                                                    }
+                                                    else
+                                                    {
+                                                        <span class="badge bg-secondary">Inactive</span>
+                                                    }
+                                                </td>
+                                                <td>
+                                                    <div class="btn-group btn-group-sm">
+                                                        <button class="btn btn-outline-primary" @onclick="() => ShowEditModal(key)">
+                                                            <i class="fas fa-edit"></i>
+                                                        </button>
+                                                        <button class="btn btn-outline-danger" @onclick="() => ShowDeleteModal(key)">
+                                                            <i class="fas fa-trash"></i>
+                                                        </button>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="text-center py-5">
+                                <i class="fas fa-key fa-3x text-muted mb-3"></i>
+                                <h5 class="text-muted">No API Keys Created</h5>
+                                <p class="text-muted">Create your first API key to start using the BlessedRSI API.</p>
+                                <button class="btn btn-primary" @onclick="ShowCreateModal">
+                                    <i class="fas fa-plus"></i> Create Your First API Key
+                                </button>
+                            </div>
+                        }
+
+                        @if (apiKeys.Count >= 5)
+                        {
+                            <div class="alert alert-info">
+                                <i class="fas fa-info-circle"></i>
+                                You have reached the maximum number of API keys (5). Delete unused keys to create new ones.
+                            </div>
+                        }
+                    }
+
+                    @if (!string.IsNullOrEmpty(message))
+                    {
+                        <div class="alert @(isSuccess ? "alert-success" : "alert-danger") mt-4">
+                            <i class="fas fa-@(isSuccess ? "check-circle" : "exclamation-triangle")"></i>
+                            @message
+                        </div>
+                    }
+                </div>
+            </div>
+
+            <!-- API Documentation -->
+            @if (userSubscriptionTier == SubscriptionTier.Shepherd)
+            {
+                <div class="card shadow-sm">
+                    <div class="card-header bg-info text-white">
+                        <h6 class="mb-0"><i class="fas fa-book"></i> API Usage Guide</h6>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-md-6">
+                                <h6 class="text-primary">Authentication</h6>
+                                <p class="small">Include your API key in requests using one of these methods:</p>
+                                <ul class="small">
+                                    <li><strong>Authorization Header:</strong> <code>Bearer your_api_key</code></li>
+                                    <li><strong>X-API-Key Header:</strong> <code>your_api_key</code></li>
+                                    <li><strong>Query Parameter:</strong> <code>?api_key=your_api_key</code></li>
+                                </ul>
+                            </div>
+                            <div class="col-md-6">
+                                <h6 class="text-primary">Rate Limits</h6>
+                                <ul class="small">
+                                    <li><strong>Shepherd Tier:</strong> 10,000 requests/hour</li>
+                                    <li><strong>Base URL:</strong> <code>@baseUrl/api/</code></li>
+                                    <li><strong>Test Endpoint:</strong> <code>GET /api/apikey/test</code></li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+<!-- Create API Key Modal -->
+<div class="modal fade" id="createApiKeyModal" tabindex="-1" aria-labelledby="createApiKeyModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header bg-primary text-white">
+                <h5 class="modal-title" id="createApiKeyModalLabel">
+                    <i class="fas fa-plus"></i> Create New API Key
+                </h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <EditForm Model="createRequest" OnValidSubmit="CreateApiKey">
+                    <DataAnnotationsValidator />
+                    
+                    <div class="mb-3">
+                        <label class="form-label">Name</label>
+                        <InputText @bind-Value="createRequest.Name" class="form-control" placeholder="e.g., Production API Key" />
+                        <ValidationMessage For="() => createRequest.Name" />
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label">Description (optional)</label>
+                        <InputTextArea @bind-Value="createRequest.Description" class="form-control" rows="2" placeholder="Brief description of this key's purpose" />
+                        <ValidationMessage For="() => createRequest.Description" />
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label">Expiration Date (optional)</label>
+                        <InputDate @bind-Value="createRequest.ExpiresAt" class="form-control" />
+                        <div class="form-text">Leave empty for no expiration</div>
+                    </div>
+                    
+                    <div class="d-grid gap-2">
+                        <button type="submit" class="btn btn-primary" disabled="@isLoading">
+                            @if (isLoading)
+                            {
+                                <i class="fas fa-spinner fa-spin"></i> Creating...
+                            }
+                            else
+                            {
+                                <i class="fas fa-key"></i> Create API Key
+                            }
+                        </button>
+                        
+                        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">
+                            Cancel
+                        </button>
+                    </div>
+                </EditForm>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Show Created API Key Modal -->
+<div class="modal fade" id="showApiKeyModal" tabindex="-1" aria-labelledby="showApiKeyModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header bg-success text-white">
+                <h5 class="modal-title" id="showApiKeyModalLabel">
+                    <i class="fas fa-check-circle"></i> API Key Created Successfully
+                </h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-warning">
+                    <strong><i class="fas fa-exclamation-triangle"></i> Important Security Notice</strong>
+                    <p class="mt-2 mb-0">
+                        This is the only time you'll see your complete API key. 
+                        Store it securely - you won't be able to view it again.
+                    </p>
+                </div>
+                
+                <div class="mb-3">
+                    <label class="form-label">Your API Key</label>
+                    <div class="input-group">
+                        <input type="text" class="form-control" value="@newlyCreatedApiKey" readonly />
+                        <button class="btn btn-outline-secondary" @onclick="CopyApiKey">
+                            <i class="fas fa-copy"></i> Copy
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="d-grid">
+                    <button type="button" class="btn btn-primary" data-bs-dismiss="modal">
+                        I've Saved My API Key
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private List<UserApiKeyDto> apiKeys = new();
+    private CreateApiKeyRequest createRequest = new();
+    private UserApiKeyDto? selectedKey;
+    private bool isLoading = false;
+    private string message = "";
+    private bool isSuccess = false;
+    private string newlyCreatedApiKey = "";
+    private SubscriptionTier userSubscriptionTier = SubscriptionTier.Sparrow;
+    private string baseUrl = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        baseUrl = Navigation.BaseUri.TrimEnd('/');
+        await LoadUserSubscription();
+        if (userSubscriptionTier == SubscriptionTier.Shepherd)
+        {
+            await LoadApiKeys();
+        }
+    }
+
+    private async Task LoadUserSubscription()
+    {
+        try
+        {
+            var response = await JSRuntime.InvokeAsync<string>("blessedRsiAuth.fetchWithAuth", "/api/auth/me");
+            var userInfo = JsonSerializer.Deserialize<JsonElement>(response);
+            
+            if (userInfo.TryGetProperty("subscriptionTier", out var tierElement))
+            {
+                if (Enum.TryParse<SubscriptionTier>(tierElement.GetString(), out var tier))
+                {
+                    userSubscriptionTier = tier;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error loading user subscription: {ex.Message}");
+        }
+    }
+
+    private async Task LoadApiKeys()
+    {
+        try
+        {
+            var response = await JSRuntime.InvokeAsync<string>("blessedRsiAuth.fetchWithAuth", "/api/apikey");
+            var result = JsonSerializer.Deserialize<ApiKeyListResponse>(response, new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            });
+
+            if (result?.Success == true)
+            {
+                apiKeys = result.ApiKeys;
+            }
+        }
+        catch (Exception ex)
+        {
+            message = "Error loading API keys";
+            isSuccess = false;
+            Console.WriteLine($"Error loading API keys: {ex.Message}");
+        }
+    }
+
+    private async Task ShowCreateModal()
+    {
+        createRequest = new CreateApiKeyRequest();
+        message = "";
+        await JSRuntime.InvokeVoidAsync("eval", "new bootstrap.Modal(document.getElementById('createApiKeyModal')).show()");
+    }
+
+    private async Task CreateApiKey()
+    {
+        isLoading = true;
+        message = "";
+
+        try
+        {
+            var response = await JSRuntime.InvokeAsync<string>("blessedRsiAuth.fetchWithAuth", "/api/apikey", new
+            {
+                method = "POST",
+                headers = new { Content_Type = "application/json" },
+                body = JsonSerializer.Serialize(createRequest)
+            });
+
+            var result = JsonSerializer.Deserialize<CreateApiKeyResponse>(response, new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            });
+
+            if (result?.Success == true)
+            {
+                newlyCreatedApiKey = result.ApiKey ?? "";
+                await JSRuntime.InvokeVoidAsync("eval", "bootstrap.Modal.getInstance(document.getElementById('createApiKeyModal')).hide()");
+                await JSRuntime.InvokeVoidAsync("eval", "new bootstrap.Modal(document.getElementById('showApiKeyModal')).show()");
+                await LoadApiKeys();
+                message = "API key created successfully!";
+                isSuccess = true;
+            }
+            else
+            {
+                message = result?.Message ?? "Failed to create API key";
+                isSuccess = false;
+            }
+        }
+        catch (Exception ex)
+        {
+            message = "Error creating API key";
+            isSuccess = false;
+            Console.WriteLine($"Error creating API key: {ex.Message}");
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private void ShowEditModal(UserApiKeyDto key)
+    {
+        selectedKey = key;
+        // Implementation for edit modal would go here
+    }
+
+    private void ShowDeleteModal(UserApiKeyDto key)
+    {
+        selectedKey = key;
+        // Implementation for delete modal would go here
+    }
+
+    private async Task CopyApiKey()
+    {
+        await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", newlyCreatedApiKey);
+        
+        message = "API key copied to clipboard!";
+        isSuccess = true;
+        
+        await Task.Delay(3000);
+        message = "";
+    }
+}
